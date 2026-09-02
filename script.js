@@ -252,10 +252,10 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
 }
 
 function updateTrackingAndCounting(detections, frameHeight) {
-    const countingLineY = frameHeight * 0.7;
+    // Đưa vạch đếm lên vị trí 45% chiều cao khung hình để xe kịp được tracking từ xa trước khi qua vạch
+    const countingLineY = frameHeight * 0.45;
     let currentTracks = [];
     
-    // Tăng tuổi các track hiện tại trước khi match
     tracks.forEach(track => {
         track.age++;
     });
@@ -266,7 +266,7 @@ function updateTrackingAndCounting(detections, frameHeight) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 120; // Mở rộng vùng tìm kiếm để giữ liên tục ID xe
+        let minDst = 120; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -281,7 +281,6 @@ function updateTrackingAndCounting(detections, frameHeight) {
         });
 
         if (matchedTrack) {
-            // Loại bỏ track đã được match khỏi danh sách chờ để tránh gộp trùng
             const index = tracks.indexOf(matchedTrack);
             if (index > -1) {
                 tracks.splice(index, 1);
@@ -290,9 +289,8 @@ function updateTrackingAndCounting(detections, frameHeight) {
             const prevY = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
-            matchedTrack.age = 0; // Reset tuổi khi nhận diện lại được
+            matchedTrack.age = 0; 
 
-            // Xét điều kiện qua vạch theo cả 2 hướng di chuyển
             if (!countedIds.has(matchedTrack.id)) {
                 if ((prevY < countingLineY && cy >= countingLineY) || (prevY > countingLineY && cy <= countingLineY)) {
                     countedIds.add(matchedTrack.id);
@@ -312,7 +310,6 @@ function updateTrackingAndCounting(detections, frameHeight) {
         }
     });
 
-    // Giữ lại các track chưa match nhưng còn "trẻ" (dưới 15 frame) để chống mất track đột ngột
     tracks.forEach(track => {
         if (track.age < 15) {
             currentTracks.push(track);
@@ -323,7 +320,8 @@ function updateTrackingAndCounting(detections, frameHeight) {
 }
 
 function drawDetections(detections) {
-    const countingLineY = canvas.height * 0.7;
+    // Đồng bộ vị trí vạch đếm ở 45% chiều cao khung hình
+    const countingLineY = canvas.height * 0.45;
 
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = 3;
