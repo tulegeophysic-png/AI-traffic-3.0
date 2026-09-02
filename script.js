@@ -175,7 +175,6 @@ async function processFrame() {
     requestAnimationFrame(processFrame);
 }
 
-// Hàm Letterbox chuẩn giúp giữ đúng tỷ lệ khung hình cho YOLO
 function preprocessWithLetterbox(sourceCanvas) {
     const targetSize = 640;
     const tempCanvas = document.createElement('canvas');
@@ -210,7 +209,6 @@ function preprocessWithLetterbox(sourceCanvas) {
     };
 }
 
-// Ánh xạ ngược tọa độ từ không gian letterbox (640x640) về kích thước gốc của video
 function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     const dets = [];
     const data = output.data;
@@ -222,7 +220,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         let rx2 = (x2 - dw) / ratio;
         let ry2 = (y2 - dh) / ratio;
 
-        // Clip trong biên video gốc
         rx1 = Math.max(0, Math.min(origWidth, rx1));
         ry1 = Math.max(0, Math.min(origHeight, ry1));
         rx2 = Math.max(0, Math.min(origWidth, rx2));
@@ -257,7 +254,11 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
 function updateTrackingAndCounting(detections, frameHeight) {
     const countingLineY = frameHeight * 0.7;
     let currentTracks = [];
-    let unmatchedTracks = [...tracks];
+    
+    // Tăng tuổi các track hiện tại trước khi match
+    tracks.forEach(track => {
+        track.age++;
+    });
 
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
@@ -265,29 +266,39 @@ function updateTrackingAndCounting(detections, frameHeight) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 80; 
+        let minDst = 120; // Mở rộng vùng tìm kiếm để giữ liên tục ID xe
 
-        unmatchedTracks.forEach((track, index) => {
-            const tcx = track.bbox[0] + track.bbox[2] / 2;
-            const tcy = track.bbox[1] + track.bbox[3] / 2;
-            const dst = Math.hypot(cx - tcx, cy - tcy);
-            if (dst < minDst && track.className === det.className) {
-                minDst = dst;
-                matchedTrack = track;
-                unmatchedTracks.splice(index, 1);
+        tracks.forEach(track => {
+            if (track.className === det.className) {
+                const tcx = track.bbox[0] + track.bbox[2] / 2;
+                const tcy = track.bbox[1] + track.bbox[3] / 2;
+                const dst = Math.hypot(cx - tcx, cy - tcy);
+                if (dst < minDst) {
+                    minDst = dst;
+                    matchedTrack = track;
+                }
             }
         });
 
         if (matchedTrack) {
+            // Loại bỏ track đã được match khỏi danh sách chờ để tránh gộp trùng
+            const index = tracks.indexOf(matchedTrack);
+            if (index > -1) {
+                tracks.splice(index, 1);
+            }
+
             const prevY = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
-            matchedTrack.age = 0;
+            matchedTrack.age = 0; // Reset tuổi khi nhận diện lại được
 
-            if (prevY < countingLineY && cy >= countingLineY && !countedIds.has(matchedTrack.id)) {
-                countedIds.add(matchedTrack.id);
-                counts[det.className]++;
-                counts.total++;
+            // Xét điều kiện qua vạch theo cả 2 hướng di chuyển
+            if (!countedIds.has(matchedTrack.id)) {
+                if ((prevY < countingLineY && cy >= countingLineY) || (prevY > countingLineY && cy <= countingLineY)) {
+                    countedIds.add(matchedTrack.id);
+                    counts[det.className]++;
+                    counts.total++;
+                }
             }
             currentTracks.push(matchedTrack);
         } else {
@@ -298,6 +309,13 @@ function updateTrackingAndCounting(detections, frameHeight) {
                 confidence: det.confidence,
                 age: 0
             });
+        }
+    });
+
+    // Giữ lại các track chưa match nhưng còn "trẻ" (dưới 15 frame) để chống mất track đột ngột
+    tracks.forEach(track => {
+        if (track.age < 15) {
+            currentTracks.push(track);
         }
     });
 
