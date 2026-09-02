@@ -15,6 +15,12 @@ let nextTrackId = 1;
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
+// Cấu hình vạch đếm (tính theo tỷ lệ 0.0 -> 1.0)
+let lineConfig = {
+    positionRatio: 0.45
+};
+
+let isDraggingLine = false;
 let chartInstance = null;
 let lastTime = performance.now();
 let frameCount = 0;
@@ -25,9 +31,56 @@ setInterval(() => {
     document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
+// Xử lý kéo thả vạch đếm trên canvas
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+
+    const directionSelect = document.getElementById('counting-direction').value;
+    const isHoriz = directionSelect.includes('vertical');
+
+    if (isHoriz) {
+        const lineY = canvas.height * lineConfig.positionRatio;
+        if (Math.abs(mouseY - lineY) < 15) isDraggingLine = true;
+    } else {
+        const lineX = canvas.width * lineConfig.positionRatio;
+        if (Math.abs(mouseX - lineX) < 15) isDraggingLine = true;
+    }
+});
+
+window.addEventListener('mousemove', (e) => {
+    if (!isDraggingLine) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+
+    const directionSelect = document.getElementById('counting-direction').value;
+    const isHoriz = directionSelect.includes('vertical');
+
+    if (isHoriz) {
+        lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseY / canvas.height));
+    } else {
+        lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseX / canvas.width));
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    isDraggingLine = false;
+});
+
+function resetLinePosition() {
+    lineConfig.positionRatio = 0.45;
+}
+
 document.getElementById('upload-video').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (file) {
+        resetSystemDataOnly();
         document.getElementById('file-name').innerText = file.name;
         videoElement.src = URL.createObjectURL(file);
         videoElement.load();
@@ -127,13 +180,17 @@ function stopAI() {
     setStatus('stopped', 'AI STOPPED');
 }
 
-function resetSystem() {
-    stopAI();
+function resetSystemDataOnly() {
     counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
     countedIds.clear();
     tracks = [];
     nextTrackId = 1;
     updateUIStats();
+}
+
+function resetSystem() {
+    stopAI();
+    resetSystemDataOnly();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     document.getElementById('file-name').innerText = "Chưa chọn file";
     videoElement.src = "";
@@ -165,8 +222,8 @@ async function processFrame() {
         const output = results[session.outputNames[0]];
 
         const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-        updateTrackingAndCounting(detections, canvas.height);
-        drawDetections(detections);
+        updateTrackingAndCounting(detections);
+        drawDetectionsAndLine();
         updateUIStats();
     } catch (err) {
         console.error("Inference error:", err);
@@ -251,9 +308,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     return dets;
 }
 
-function updateTrackingAndCounting(detections, frameHeight) {
-    // Đưa vạch đếm lên vị trí 45% chiều cao khung hình để xe kịp được tracking từ xa trước khi qua vạch
-    const countingLineY = frameHeight * 0.45;
+function updateTrackingAndCounting(detections) {
     let currentTracks = [];
     
     tracks.forEach(track => {
@@ -266,7 +321,7 @@ function updateTrackingAndCounting(detections, frameHeight) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 120; 
+        let minDst = 100;
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -286,13 +341,29 @@ function updateTrackingAndCounting(detections, frameHeight) {
                 tracks.splice(index, 1);
             }
 
-            const prevY = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
+            const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
+            const prevCy = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
+
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
             matchedTrack.age = 0; 
 
             if (!countedIds.has(matchedTrack.id)) {
-                if ((prevY < countingLineY && cy >= countingLineY) || (prevY > countingLineY && cy <= countingLineY)) {
+                const direction = document.getElementById('counting-direction').value;
+                const lineVal = lineConfig.positionRatio * (direction.includes('vertical') ? canvas.height : canvas.width);
+
+                let hasCrossed = false;
+                if (direction === 'vertical-down') {
+                    if (prevCy < lineVal && cy >= lineVal) hasCrossed = true;
+                } else if (direction === 'vertical-up') {
+                    if (prevCy > lineVal && cy <= lineVal) hasCrossed = true;
+                } else if (direction === 'horizontal-right') {
+                    if (prevCx < lineVal && cx >= lineVal) hasCrossed = true;
+                } else if (direction === 'horizontal-left') {
+                    if (prevCx > lineVal && cx <= lineVal) hasCrossed = true;
+                }
+
+                if (hasCrossed) {
                     countedIds.add(matchedTrack.id);
                     counts[det.className]++;
                     counts.total++;
@@ -311,7 +382,7 @@ function updateTrackingAndCounting(detections, frameHeight) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 15) {
+        if (track.age < 20) {
             currentTracks.push(track);
         }
     });
@@ -319,20 +390,30 @@ function updateTrackingAndCounting(detections, frameHeight) {
     tracks = currentTracks;
 }
 
-function drawDetections(detections) {
-    // Đồng bộ vị trí vạch đếm ở 45% chiều cao khung hình
-    const countingLineY = canvas.height * 0.45;
+function drawDetectionsAndLine() {
+    const direction = document.getElementById('counting-direction').value;
+    const isVert = direction.includes('vertical');
+    const lineCoord = lineConfig.positionRatio * (isVert ? canvas.height : canvas.width);
 
-    ctx.strokeStyle = '#ef4444';
+    ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(0, countingLineY);
-    ctx.lineTo(canvas.width, countingLineY);
+    if (isVert) {
+        ctx.moveTo(0, lineCoord);
+        ctx.lineTo(canvas.width, lineCoord);
+    } else {
+        ctx.moveTo(lineCoord, 0);
+        ctx.lineTo(lineCoord, canvas.height);
+    }
     ctx.stroke();
 
-    ctx.fillStyle = '#ef4444';
-    ctx.font = 'bold 14px Segoe UI';
-    ctx.fillText('COUNTING LINE', 15, countingLineY - 8);
+    ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
+    ctx.font = 'bold 13px Segoe UI';
+    if (isVert) {
+        ctx.fillText(`VẠCH ĐẾM (${direction.toUpperCase()})`, 15, lineCoord - 8);
+    } else {
+        ctx.fillText(`VẠCH ĐẾM`, lineCoord + 8, 20);
+    }
 
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;

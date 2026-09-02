@@ -45,10 +45,27 @@
                     </div>
                 </div>
 
-                <div class="settings-panel">
+                <div class="settings-panel" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <div class="slider-group">
                         <label>Confidence Threshold: <span id="conf-val">0.50</span></label>
                         <input type="range" id="conf-slider" min="0.1" max="0.9" step="0.05" value="0.50" oninput="updateConfidence(this.value)">
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 5px;">
+                        <div style="flex: 1;">
+                            <label>Hướng đếm phương tiện:</label>
+                            <select id="counting-direction" style="width: 100%; background: #1e293b; color: #fff; border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer;">
+                                <option value="vertical-down">🡗 Từ Trên xuống Dưới (Y)</option>
+                                <option value="vertical-up">🡕 Từ Dưới lên Trên (Y)</option>
+                                <option value="horizontal-right">🡖 Từ Trái sang Phải (X)</option>
+                                <option value="horizontal-left">🡕 Từ Phải sang Trái (X)</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; align-items: flex-end; padding-top: 16px;">
+                            <button class="btn btn-info" style="font-size: 11px; padding: 5px 10px;" onclick="resetLinePosition()">Reset Vạch Đếm</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: #94a3b8; font-style: italic;">
+                        💡 Mẹo: Bạn có thể nhấn giữ và kéo trực tiếp vạch đếm trên màn hình video để thay đổi vị trí.
                     </div>
                 </div>
             </div>
@@ -92,11 +109,11 @@
                 <div class="analytics-content">
                     <div class="analytic-row">
                         <span>Trạng thái Tracking:</span>
-                        <strong>Active (IoU Centroid Tracker)</strong>
+                        <strong>Active (Centroid Tracker + Line Crossing)</strong>
                     </div>
                     <div class="analytic-row">
-                        <span>Counting Line Y:</span>
-                        <strong>70% Chiều cao khung hình</strong>
+                        <span>Tâm bounding box:</span>
+                        <strong>Đã kích hoạt</strong>
                     </div>
                     <div class="analytic-row speed-warning">
                         <span>⚠️ Cảnh báo tốc độ:</span>
