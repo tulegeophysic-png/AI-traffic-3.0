@@ -5,6 +5,7 @@ let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
 
+// Mapping Class COCO cho YOLOv10 (2: car, 3: motorcycle, 5: bus, 7: truck)
 let classMap = { 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck' };
 
 let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
@@ -20,13 +21,13 @@ let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
 
-// Clock update
+// Đồng hồ thời gian thực
 setInterval(() => {
     const now = new Date();
     document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
-// File input handler
+// Xử lý nạp video và tự động căn chỉnh kích thước Canvas chuẩn xác
 document.getElementById('upload-video').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (file) {
@@ -41,7 +42,7 @@ document.getElementById('upload-video').addEventListener('change', function(e) {
     }
 });
 
-// Initialize Chart.js
+// Khởi tạo biểu đồ Chart.js
 function initChart() {
     const ctxChart = document.getElementById('trafficChart').getContext('2d');
     chartInstance = new Chart(ctxChart, {
@@ -59,8 +60,8 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#f8fafc' } },
-                x: { grid: { display: false }, ticks: { color: '#f8fafc' } }
+                y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#f8fafc', font: { size: 11 } } },
+                x: { grid: { display: false }, ticks: { color: '#f8fafc', font: { size: 11 } } }
             },
             plugins: { legend: { display: false } }
         }
@@ -73,6 +74,7 @@ function updateConfidence(val) {
     document.getElementById('conf-val').innerText = val;
 }
 
+// Nạp model ONNX
 async function loadModel() {
     try {
         setStatus('waiting', 'LOADING MODEL...');
@@ -101,7 +103,7 @@ async function loadModel() {
     } catch (e) {
         console.error("Lỗi load model:", e);
         setStatus('error', 'AI ERROR');
-        alert("Không thể tải file yolov10n.onnx. Hãy chắc chắn bạn chạy qua Live Server và file nằm trong thư mục model/");
+        alert("Không thể tải file yolov10n.onnx. Hãy đảm bảo bạn chạy qua Live Server và file model đặt đúng cấu trúc!");
     }
 }
 loadModel();
@@ -112,7 +114,7 @@ function setStatus(statusClass, text) {
     badge.innerText = text;
 }
 
-async function startAI() {
+function startAI() {
     if (!videoElement.src) {
         alert("Vui lòng chọn video giao thông trước!");
         return;
@@ -147,7 +149,7 @@ function resetSystem() {
     nextTrackId = 1;
     updateUIStats();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    document.getElementById('file-name').innerText = "Chưa chọn file nào";
+    document.getElementById('file-name').innerText = "Chưa chọn file";
     videoElement.src = "";
 }
 
@@ -255,9 +257,11 @@ function parseYolov10Output(output, origWidth, origHeight) {
     return dets;
 }
 
+// Thuật toán Tracking (IoU / Khoảng cách tâm) & Đếm xe qua vạch 70% chiều cao
 function updateTrackingAndCounting(detections, frameHeight) {
     const countingLineY = frameHeight * 0.7;
     let currentTracks = [];
+    let unmatchedTracks = [...tracks];
 
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
@@ -265,15 +269,16 @@ function updateTrackingAndCounting(detections, frameHeight) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 50;
+        let minDst = 80; // Ngưỡng khoảng cách tối đa để khớp ID giữa 2 frame liên tiếp
 
-        tracks.forEach(track => {
+        unmatchedTracks.forEach((track, index) => {
             const tcx = track.bbox[0] + track.bbox[2] / 2;
             const tcy = track.bbox[1] + track.bbox[3] / 2;
             const dst = Math.hypot(cx - tcx, cy - tcy);
             if (dst < minDst && track.className === det.className) {
                 minDst = dst;
                 matchedTrack = track;
+                unmatchedTracks.splice(index, 1);
             }
         });
 
@@ -281,7 +286,9 @@ function updateTrackingAndCounting(detections, frameHeight) {
             const prevY = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
+            matchedTrack.age = 0;
 
+            // Kiểm tra xe đi qua vạch đếm (countingLineY) theo chiều đi xuống
             if (prevY < countingLineY && cy >= countingLineY && !countedIds.has(matchedTrack.id)) {
                 countedIds.add(matchedTrack.id);
                 counts[det.className]++;
@@ -289,11 +296,13 @@ function updateTrackingAndCounting(detections, frameHeight) {
             }
             currentTracks.push(matchedTrack);
         } else {
+            // Tạo ID mới cho phương tiện mới xuất hiện
             currentTracks.push({
                 id: nextTrackId++,
                 bbox: [x, y, w, h],
                 className: det.className,
-                confidence: det.confidence
+                confidence: det.confidence,
+                age: 0
             });
         }
     });
@@ -301,9 +310,11 @@ function updateTrackingAndCounting(detections, frameHeight) {
     tracks = currentTracks;
 }
 
+// Vẽ khung nhận diện, ID và vạch đếm lên màn hình Canvas
 function drawDetections(detections) {
     const countingLineY = canvas.height * 0.7;
 
+    // Vẽ vạch đếm màu đỏ
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -312,21 +323,24 @@ function drawDetections(detections) {
     ctx.stroke();
 
     ctx.fillStyle = '#ef4444';
-    ctx.font = 'bold 16px Segoe UI';
-    ctx.fillText('COUNTING LINE', 20, countingLineY - 10);
+    ctx.font = 'bold 14px Segoe UI';
+    ctx.fillText('COUNTING LINE', 15, countingLineY - 8);
 
+    // Vẽ từng bounding box và ID của xe
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
-        ctx.strokeStyle = getCategoryColor(track.className);
+        const color = getCategoryColor(track.className);
+
+        ctx.strokeStyle = color;
         ctx.lineWidth = 2;
         ctx.strokeRect(x, y, w, h);
 
-        ctx.fillStyle = getCategoryColor(track.className);
-        ctx.fillRect(x, y - 22, 110, 22);
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y - 20, 110, 20);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 12px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 4, y - 6);
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 4, y - 5);
     });
 }
 
