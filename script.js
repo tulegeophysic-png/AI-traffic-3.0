@@ -5,7 +5,6 @@ let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
 
-// Mapping Class COCO cho YOLOv10 (2: car, 3: motorcycle, 5: bus, 7: truck)
 let classMap = { 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck' };
 
 let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
@@ -21,13 +20,11 @@ let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
 
-// Đồng hồ thời gian thực
 setInterval(() => {
     const now = new Date();
     document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
-// Xử lý nạp video và tự động căn chỉnh kích thước Canvas chuẩn xác
 document.getElementById('upload-video').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (file) {
@@ -38,11 +35,14 @@ document.getElementById('upload-video').addEventListener('change', function(e) {
             canvas.width = videoElement.videoWidth;
             canvas.height = videoElement.videoHeight;
             ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            if (session) {
+                document.getElementById('btn-start').disabled = false;
+                setStatus('active', 'AI READY');
+            }
         };
     }
 });
 
-// Khởi tạo biểu đồ Chart.js
 function initChart() {
     const ctxChart = document.getElementById('trafficChart').getContext('2d');
     chartInstance = new Chart(ctxChart, {
@@ -74,36 +74,29 @@ function updateConfidence(val) {
     document.getElementById('conf-val').innerText = val;
 }
 
-// Nạp model ONNX
 async function loadModel() {
     try {
         setStatus('waiting', 'LOADING MODEL...');
         const modelFileName = 'yolov10n.onnx'; 
-        const modelPaths = [
-            `./model/${modelFileName}`,
-            `model/${modelFileName}`,
-            `./${modelFileName}`
-        ];
+        const modelPaths = [`./model/${modelFileName}`, `model/${modelFileName}`, `./${modelFileName}`];
 
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
         for (let path of modelPaths) {
             try {
-                session = await ort.InferenceSession.create(path, {
-                    executionProviders: ['wasm']
-                });
+                session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
                 if (session) break;
-            } catch (innerErr) {
-                console.warn("Thử đường dẫn thất bại:", path);
-            }
+            } catch (innerErr) {}
         }
 
         if (!session) throw new Error("Không tìm thấy model.");
         setStatus('active', 'AI READY');
+        if (videoElement.src) {
+            document.getElementById('btn-start').disabled = false;
+        }
     } catch (e) {
-        console.error("Lỗi load model:", e);
         setStatus('error', 'AI ERROR');
-        alert("Không thể tải file yolov10n.onnx. Hãy đảm bảo bạn chạy qua Live Server và file model đặt đúng cấu trúc!");
+        alert("Không thể tải file yolov10n.onnx. Hãy kiểm tra lại đường dẫn model!");
     }
 }
 loadModel();
@@ -115,14 +108,7 @@ function setStatus(statusClass, text) {
 }
 
 function startAI() {
-    if (!videoElement.src) {
-        alert("Vui lòng chọn video giao thông trước!");
-        return;
-    }
-    if (!session) {
-        alert("Model chưa sẵn sàng!");
-        return;
-    }
+    if (!videoElement.src || !session) return;
     isRunning = true;
     videoElement.play();
     document.getElementById('btn-start').disabled = true;
@@ -151,11 +137,11 @@ function resetSystem() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     document.getElementById('file-name').innerText = "Chưa chọn file";
     videoElement.src = "";
+    document.getElementById('btn-start').disabled = true;
 }
 
 async function processFrame() {
     if (!isRunning) return;
-
     if (videoElement.paused || videoElement.ended) {
         stopAI();
         return;
@@ -173,12 +159,12 @@ async function processFrame() {
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
     try {
-        const inputTensor = preprocessToBlob(canvas);
+        const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
         const inputName = session.inputNames[0];
-        const results = await session.run({ [inputName]: inputTensor });
+        const results = await session.run({ [inputName]: tensor });
         const output = results[session.outputNames[0]];
 
-        const detections = parseYolov10Output(output, canvas.width, canvas.height);
+        const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
         updateTrackingAndCounting(detections, canvas.height);
         drawDetections(detections);
         updateUIStats();
@@ -189,14 +175,26 @@ async function processFrame() {
     requestAnimationFrame(processFrame);
 }
 
-function preprocessToBlob(sourceCanvas) {
+// Hàm Letterbox chuẩn giúp giữ đúng tỷ lệ khung hình cho YOLO
+function preprocessWithLetterbox(sourceCanvas) {
     const targetSize = 640;
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
     const tempCtx = tempCanvas.getContext('2d');
-    tempCtx.drawImage(sourceCanvas, 0, 0, targetSize, targetSize);
-    
+
+    const sw = sourceCanvas.width;
+    const sh = sourceCanvas.height;
+    const ratio = Math.min(targetSize / sw, targetSize / sh);
+    const nw = sw * ratio;
+    const nh = sh * ratio;
+    const dw = (targetSize - nw) / 2;
+    const dh = (targetSize - nh) / 2;
+
+    tempCtx.fillStyle = '#727272';
+    tempCtx.fillRect(0, 0, targetSize, targetSize);
+    tempCtx.drawImage(sourceCanvas, dw, dh, nw, nh);
+
     const imgData = tempCtx.getImageData(0, 0, targetSize, targetSize);
     const { data } = imgData;
     const float32Data = new Float32Array(3 * targetSize * targetSize);
@@ -206,58 +204,56 @@ function preprocessToBlob(sourceCanvas) {
         float32Data[targetSize * targetSize + i] = data[i * 4 + 1] / 255.0;      
         float32Data[2 * targetSize * targetSize + i] = data[i * 4 + 2] / 255.0;  
     }
-    return new ort.Tensor('float32', float32Data, [1, 3, targetSize, targetSize]);
+    return {
+        tensor: new ort.Tensor('float32', float32Data, [1, 3, targetSize, targetSize]),
+        ratio, dw, dh
+    };
 }
 
-function parseYolov10Output(output, origWidth, origHeight) {
+// Ánh xạ ngược tọa độ từ không gian letterbox (640x640) về kích thước gốc của video
+function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     const dets = [];
     const data = output.data;
     const dims = output.dims;
+
+    const parseBox = (x1, y1, x2, y2, conf, clsId) => {
+        let rx1 = (x1 - dw) / ratio;
+        let ry1 = (y1 - dh) / ratio;
+        let rx2 = (x2 - dw) / ratio;
+        let ry2 = (y2 - dh) / ratio;
+
+        // Clip trong biên video gốc
+        rx1 = Math.max(0, Math.min(origWidth, rx1));
+        ry1 = Math.max(0, Math.min(origHeight, ry1));
+        rx2 = Math.max(0, Math.min(origWidth, rx2));
+        ry2 = Math.max(0, Math.min(origHeight, ry2));
+
+        if (conf >= confidenceThreshold && classMap[clsId]) {
+            dets.push({
+                bbox: [rx1, ry1, rx2 - rx1, ry2 - ry1],
+                className: classMap[clsId],
+                confidence: conf
+            });
+        }
+    };
 
     if (dims.length === 3) {
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
                 let offset = i * 6;
-                let x1 = (data[offset] / 640) * origWidth;
-                let y1 = (data[offset + 1] / 640) * origHeight;
-                let x2 = (data[offset + 2] / 640) * origWidth;
-                let y2 = (data[offset + 3] / 640) * origHeight;
-                let confidence = data[offset + 4];
-                let classId = Math.round(data[offset + 5]);
-
-                if (confidence >= confidenceThreshold && classMap[classId]) {
-                    dets.push({
-                        bbox: [x1, y1, x2 - x1, y2 - y1],
-                        className: classMap[classId],
-                        confidence: confidence
-                    });
-                }
+                parseBox(data[offset], data[offset + 1], data[offset + 2], data[offset + 3], data[offset + 4], Math.round(data[offset + 5]));
             }
         } else if (dims[1] === 6) {
             let numRows = dims[2];
             for (let i = 0; i < numRows; i++) {
-                let x1 = (data[0 * numRows + i] / 640) * origWidth;
-                let y1 = (data[1 * numRows + i] / 640) * origHeight;
-                let x2 = (data[2 * numRows + i] / 640) * origWidth;
-                let y2 = (data[3 * numRows + i] / 640) * origHeight;
-                let confidence = data[4 * numRows + i];
-                let classId = Math.round(data[5 * numRows + i]);
-
-                if (confidence >= confidenceThreshold && classMap[classId]) {
-                    dets.push({
-                        bbox: [x1, y1, x2 - x1, y2 - y1],
-                        className: classMap[classId],
-                        confidence: confidence
-                    });
-                }
+                parseBox(data[0 * numRows + i], data[1 * numRows + i], data[2 * numRows + i], data[3 * numRows + i], data[4 * numRows + i], Math.round(data[5 * numRows + i]));
             }
         }
     }
     return dets;
 }
 
-// Thuật toán Tracking (IoU / Khoảng cách tâm) & Đếm xe qua vạch 70% chiều cao
 function updateTrackingAndCounting(detections, frameHeight) {
     const countingLineY = frameHeight * 0.7;
     let currentTracks = [];
@@ -269,7 +265,7 @@ function updateTrackingAndCounting(detections, frameHeight) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 80; // Ngưỡng khoảng cách tối đa để khớp ID giữa 2 frame liên tiếp
+        let minDst = 80; 
 
         unmatchedTracks.forEach((track, index) => {
             const tcx = track.bbox[0] + track.bbox[2] / 2;
@@ -288,7 +284,6 @@ function updateTrackingAndCounting(detections, frameHeight) {
             matchedTrack.confidence = det.confidence;
             matchedTrack.age = 0;
 
-            // Kiểm tra xe đi qua vạch đếm (countingLineY) theo chiều đi xuống
             if (prevY < countingLineY && cy >= countingLineY && !countedIds.has(matchedTrack.id)) {
                 countedIds.add(matchedTrack.id);
                 counts[det.className]++;
@@ -296,7 +291,6 @@ function updateTrackingAndCounting(detections, frameHeight) {
             }
             currentTracks.push(matchedTrack);
         } else {
-            // Tạo ID mới cho phương tiện mới xuất hiện
             currentTracks.push({
                 id: nextTrackId++,
                 bbox: [x, y, w, h],
@@ -310,11 +304,9 @@ function updateTrackingAndCounting(detections, frameHeight) {
     tracks = currentTracks;
 }
 
-// Vẽ khung nhận diện, ID và vạch đếm lên màn hình Canvas
 function drawDetections(detections) {
     const countingLineY = canvas.height * 0.7;
 
-    // Vẽ vạch đếm màu đỏ
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -326,7 +318,6 @@ function drawDetections(detections) {
     ctx.font = 'bold 14px Segoe UI';
     ctx.fillText('COUNTING LINE', 15, countingLineY - 8);
 
-    // Vẽ từng bounding box và ID của xe
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
         const color = getCategoryColor(track.className);
@@ -336,11 +327,11 @@ function drawDetections(detections) {
         ctx.strokeRect(x, y, w, h);
 
         ctx.fillStyle = color;
-        ctx.fillRect(x, y - 20, 110, 20);
+        ctx.fillRect(x, y - 22, 120, 22);
 
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 11px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 4, y - 5);
+        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 4, y - 6);
     });
 }
 

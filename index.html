@@ -5,14 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI TRAFFIC – YOLOv10 TRAFFIC MONITORING & TRACKING</title>
     <link rel="stylesheet" href="style.css">
-    <!-- ONNX Runtime Web -->
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-    <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="app-container">
-        <!-- Header Tổng Quan -->
         <header class="app-header">
             <div class="header-title-area">
                 <h1>AI TRAFFIC – YOLOv10 NHẬN DIỆN, TRACKING & ĐẾM PHƯƠNG TIỆN</h1>
@@ -26,7 +23,6 @@
             </div>
         </header>
 
-        <!-- Main Workspace: Trái là Video, Phải là Thống kê số lượng theo thời gian thực -->
         <div class="workspace-grid">
             <div class="card video-section">
                 <div class="card-title">📹 Khung Giám Sát Video Giao Thông & AI</div>
@@ -42,7 +38,7 @@
                         <span id="file-name" class="file-name">Chưa chọn file</span>
                     </div>
                     <div class="action-buttons">
-                        <button id="btn-start" class="btn btn-success" onclick="startAI()">START AI</button>
+                        <button id="btn-start" class="btn btn-success" onclick="startAI()" disabled>START AI</button>
                         <button id="btn-stop" class="btn btn-danger" onclick="stopAI()" disabled>STOP</button>
                         <button id="btn-reset" class="btn btn-warning" onclick="resetSystem()">RESET</button>
                         <button id="btn-capture" class="btn btn-info" onclick="captureFrame()" disabled>CAPTURE</button>
@@ -57,7 +53,6 @@
                 </div>
             </div>
 
-            <!-- Bảng Thống Kê Nằm Gọn Ngay Bên Phải Video -->
             <div class="card stats-card">
                 <div class="card-title">📊 Thống Kê Theo Dõi Thời Gian Thực</div>
                 <div class="stats-list">
@@ -85,7 +80,6 @@
             </div>
         </div>
 
-        <!-- Analytics Grid: Biểu đồ & Thông tin bổ trợ bên dưới -->
         <div class="analytics-grid">
             <div class="card">
                 <div class="card-title">📈 Biểu Đồ Thống Kê Phương Tiện</div>
