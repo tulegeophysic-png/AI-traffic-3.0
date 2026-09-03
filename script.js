@@ -1,6 +1,6 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.25; // Giảm xuống 0.25 để bắt xe dễ hơn
+let confidenceThreshold = 0.25; 
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -16,7 +16,7 @@ let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
 let lineConfig = {
-    positionRatio: 0.65 // Mặc định vạch đếm nằm thấp xuống dưới một chút cho dễ nhìn
+    positionRatio: 0.65 
 };
 
 let isDraggingLine = false;
@@ -259,7 +259,7 @@ async function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640; // Chuẩn input YOLOv10
+    const targetSize = 640; 
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -318,7 +318,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     };
 
     if (dims && dims.length === 3) {
-        // Hỗ trợ cả 2 định dạng phổ biến [1, N, 6] và [1, 6, N] của YOLOv10 ONNX
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -345,16 +344,16 @@ function updateTrackingAndCounting(detections) {
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
-        const cy = y + h / 2;
+        const frontY = y + h; // Sử dụng cạnh dưới (mũi xe) để bắt vạch chính xác
 
         let matchedTrack = null;
-        let minDst = 180; 
+        let minDst = 140; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
                 const tcx = track.bbox[0] + track.bbox[2] / 2;
-                const tcy = track.bbox[1] + track.bbox[3] / 2;
-                const dst = Math.hypot(cx - tcx, cy - tcy);
+                const tfy = track.bbox[1] + track.bbox[3];
+                const dst = Math.hypot(cx - tcx, frontY - tfy);
                 if (dst < minDst) {
                     minDst = dst;
                     matchedTrack = track;
@@ -368,8 +367,7 @@ function updateTrackingAndCounting(detections) {
                 tracks.splice(index, 1);
             }
 
-            const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
-            const prevCy = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
+            const prevFrontY = matchedTrack.bbox[1] + matchedTrack.bbox[3];
 
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
@@ -382,10 +380,11 @@ function updateTrackingAndCounting(detections) {
 
                 let hasCrossed = false;
                 if (direction.includes('vertical')) {
-                    if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
+                    if ((prevFrontY < lineVal && frontY >= lineVal) || (prevFrontY > lineVal && frontY <= lineVal)) {
                         hasCrossed = true;
                     }
                 } else {
+                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
                     if ((prevCx < lineVal && cx >= lineVal) || (prevCx > lineVal && cx <= lineVal)) {
                         hasCrossed = true;
                     }
@@ -414,7 +413,7 @@ function updateTrackingAndCounting(detections) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 45) {
+        if (track.age < 30) {
             currentTracks.push(track);
         }
     });
@@ -428,7 +427,6 @@ function drawDetectionsAndLine() {
     const isVert = direction.includes('vertical');
     const lineCoord = lineConfig.positionRatio * (isVert ? canvas.height : canvas.width);
 
-    // Vẽ vạch đếm màu đỏ
     ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -449,7 +447,6 @@ function drawDetectionsAndLine() {
         ctx.fillText(`VẠCH ĐẾM`, lineCoord + 10, 25);
     }
 
-    // Vẽ khung bounding box và ID của xe
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
         const color = getCategoryColor(track.className);
