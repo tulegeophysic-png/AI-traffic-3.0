@@ -1,8 +1,8 @@
 let session = null;
 let isRunning = false;
-let cameraMode = 'flycam'; // 'flycam' hoặc 'fixed'
+let cameraMode = 'flycam'; // Hoặc 'fixed'
 
-let confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
+let confidenceThreshold = 0.20; // Hạ ngưỡng xuống 0.2 để bắt tốt các xe ở xa trong video dọc
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -18,14 +18,14 @@ let vehicleHistoryLog = [];
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = { positionRatio: 0.5 };
+let lineConfig = { positionRatio: 0.7 }; // Đặt vạch đếm ở 70 chiều cao màn hình
 let isDraggingLine = false;
 let chartInstance = null;
 
 let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
-let isInferencing = false; // Cờ kiểm soát không để AI bị chồng chất lệnh gây lag
+let isInferencing = false;
 
 setInterval(() => {
     const now = new Date();
@@ -35,40 +35,26 @@ setInterval(() => {
 
 function setCameraMode(mode) {
     cameraMode = mode;
-    confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
     resetLinePosition();
     resetSystemDataOnly();
 }
 
 canvas.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    if (cameraMode === 'flycam') {
-        const lineY = canvas.height * lineConfig.positionRatio;
-        if (Math.abs(mouseY - lineY) < 40) isDraggingLine = true;
-    } else {
-        const lineX = canvas.width * lineConfig.positionRatio;
-        if (Math.abs(mouseX - lineX) < 40) isDraggingLine = true;
-    }
+    const lineY = canvas.height * lineConfig.positionRatio;
+    if (Math.abs(mouseY - lineY) < 40) isDraggingLine = true;
 });
 
 window.addEventListener('mousemove', (e) => {
     if (!isDraggingLine) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    if (cameraMode === 'flycam') {
-        lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseY / canvas.height));
-    } else {
-        lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseX / canvas.width));
-    }
+    lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseY / canvas.height));
 });
 
 window.addEventListener('mouseup', () => {
@@ -76,7 +62,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.5;
+    lineConfig.positionRatio = 0.7;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -198,7 +184,7 @@ function stopAI() {
     const capBtn = document.getElementById('btn-capture');
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
-    if (capBtn) stopBtn.disabled = true;
+    if (capBtn) capBtn.disabled = true;
 
     setStatus('stopped', 'AI STOPPED');
 }
@@ -223,7 +209,6 @@ function resetSystem() {
     if (startBtn) startBtn.disabled = true;
 }
 
-// Tách biệt hoàn toàn vòng lặp render video (60 FPS mượt mà) và AI Inference
 function processFrame() {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
@@ -241,11 +226,9 @@ function processFrame() {
         lastTime = now;
     }
 
-    // 1. Luôn vẽ khung hình video và bounding box hiện tại lên canvas với tốc độ tối đa để video không bao giờ bị giật
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
     drawDetectionsAndLine();
 
-    // 2. Chạy AI ngầm bất đồng bộ không làm nghẽn khung hình video
     if (!isInferencing) {
         isInferencing = true;
         setTimeout(async () => {
@@ -259,7 +242,7 @@ function processFrame() {
                 updateTrackingAndCounting(detections);
                 updateUIStats();
             } catch (err) {
-                console.error("Inference error:", err);
+                console.error("Inference execution error:", err);
             } finally {
                 isInferencing = false;
             }
@@ -270,7 +253,7 @@ function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = (cameraMode === 'flycam') ? 960 : 640; // Giảm flycam từ 1280 xuống 960 để giữ độ chi tiết nhưng tăng tốc xử lý đáng kể
+    const targetSize = 640; // Cố định chuẩn 640 để tương thích 100% với mọi model YOLOv10 onnx tiêu chuẩn
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -307,7 +290,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     const dets = [];
     const data = output.data;
     const dims = output.dims;
-    const minBoxSize = (cameraMode === 'flycam') ? 4 : 10;
 
     const parseBox = (x1, y1, x2, y2, conf, clsId) => {
         let rx1 = (x1 - dw) / ratio;
@@ -323,7 +305,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         const boxW = rx2 - rx1;
         const boxH = ry2 - ry1;
 
-        if (boxW < minBoxSize || boxH < minBoxSize) return;
+        if (boxW < 3 || boxH < 3) return; // Cho phép bắt vật thể nhỏ từ trên cao xuống ở video dọc
 
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
@@ -364,7 +346,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = (cameraMode === 'flycam') ? 100 : 80; 
+        let minDst = 120; // Khoảng cách tracking rộng hơn cho video dọc tốc độ di chuyển nhanh
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -384,7 +366,6 @@ function updateTrackingAndCounting(detections) {
                 tracks.splice(index, 1);
             }
 
-            const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
             const prevCy = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
 
             matchedTrack.bbox = [x, y, w, h];
@@ -392,18 +373,12 @@ function updateTrackingAndCounting(detections) {
             matchedTrack.age = 0; 
 
             if (!countedIds.has(matchedTrack.id)) {
-                let hasCrossed = false;
+                const lineVal = lineConfig.positionRatio * canvas.height;
 
-                if (cameraMode === 'flycam') {
-                    const lineVal = lineConfig.positionRatio * canvas.height;
-                    if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
-                        hasCrossed = true;
-                    }
-                } else {
-                    const lineVal = lineConfig.positionRatio * canvas.width;
-                    if ((prevCx < lineVal && cx >= lineVal) || (prevCx > lineVal && cx <= lineVal)) {
-                        hasCrossed = true;
-                    }
+                // Kiểm tra xe cắt qua vạch ngang theo trục Y (đúng với video dọc hướng từ trên xuống)
+                let hasCrossed = false;
+                if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
+                    hasCrossed = true;
                 }
 
                 if (hasCrossed) {
@@ -446,29 +421,19 @@ function updateTrackingAndCounting(detections) {
 }
 
 function drawDetectionsAndLine() {
-    const lineCoord = lineConfig.positionRatio * (cameraMode === 'flycam' ? canvas.height : canvas.width);
+    const lineCoord = lineConfig.positionRatio * canvas.height;
 
+    // Vẽ vạch ngang màu đỏ để đếm xe chạy dọc theo video
     ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    
-    if (cameraMode === 'flycam') {
-        ctx.moveTo(0, lineCoord);
-        ctx.lineTo(canvas.width, lineCoord);
-    } else {
-        ctx.moveTo(lineCoord, 0);
-        ctx.lineTo(lineCoord, canvas.height);
-    }
+    ctx.moveTo(0, lineCoord);
+    ctx.lineTo(canvas.width, lineCoord);
     ctx.stroke();
 
     ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.font = 'bold 15px Segoe UI';
-    
-    if (cameraMode === 'flycam') {
-        ctx.fillText(`VẠCH ĐẾM FLYCAM (NGANG)`, 30, lineCoord - 12);
-    } else {
-        ctx.fillText(`VẠCH ĐẾM CỘT ĐÈN (DỌC)`, lineCoord + 10, 30);
-    }
+    ctx.fillText(`VẠCH ĐẾM NGANG (VIDEO DỌC)`, 30, lineCoord - 12);
 
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
