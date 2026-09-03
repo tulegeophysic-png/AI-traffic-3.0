@@ -1,8 +1,6 @@
 let session = null;
 let isRunning = false;
-
-// CẤU HÌNH CHẾ ĐỘ CAMERA: 'flycam' (Góc từ trên xuống) hoặc 'fixed' (Cột đèn / Camera cố định)
-let cameraMode = 'flycam'; // Bạn có thể đổi thành 'fixed' nếu dùng camera cột đèn
+let cameraMode = 'flycam'; // 'flycam' hoặc 'fixed'
 
 let confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
 let videoElement = document.getElementById('video-source');
@@ -20,18 +18,14 @@ let vehicleHistoryLog = [];
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = {
-    positionRatio: 0.5 
-};
-
+let lineConfig = { positionRatio: 0.5 };
 let isDraggingLine = false;
 let chartInstance = null;
+
 let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
-
-let lastFrameTime = 0;
-const targetInterval = 1000 / 30;
+let isInferencing = false; // Cờ kiểm soát không để AI bị chồng chất lệnh gây lag
 
 setInterval(() => {
     const now = new Date();
@@ -39,7 +33,6 @@ setInterval(() => {
     if (clockEl) clockEl.innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
-// Hàm chuyển đổi chế độ nhanh trực tiếp trên code hoặc gọi từ giao diện
 function setCameraMode(mode) {
     cameraMode = mode;
     confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
@@ -205,7 +198,7 @@ function stopAI() {
     const capBtn = document.getElementById('btn-capture');
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
-    if (capBtn) capBtn.disabled = true;
+    if (capBtn) stopBtn.disabled = true;
 
     setStatus('stopped', 'AI STOPPED');
 }
@@ -230,53 +223,54 @@ function resetSystem() {
     if (startBtn) startBtn.disabled = true;
 }
 
-async function processFrame(timestamp) {
+// Tách biệt hoàn toàn vòng lặp render video (60 FPS mượt mà) và AI Inference
+function processFrame() {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
         stopAI();
         return;
     }
 
-    if (!lastFrameTime) lastFrameTime = timestamp;
-    const elapsed = timestamp - lastFrameTime;
+    const now = performance.now();
+    frameCount++;
+    if (now - lastTime >= 1000) {
+        currentFps = (frameCount * 1000) / (now - lastTime);
+        const fpsEl = document.getElementById('fps-display');
+        if (fpsEl) fpsEl.innerText = currentFps.toFixed(1);
+        frameCount = 0;
+        lastTime = now;
+    }
 
-    if (elapsed >= targetInterval) {
-        lastFrameTime = timestamp - (elapsed % targetInterval);
+    // 1. Luôn vẽ khung hình video và bounding box hiện tại lên canvas với tốc độ tối đa để video không bao giờ bị giật
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    drawDetectionsAndLine();
 
-        const now = performance.now();
-        frameCount++;
-        if (now - lastTime >= 1000) {
-            currentFps = (frameCount * 1000) / (now - lastTime);
-            const fpsEl = document.getElementById('fps-display');
-            if (fpsEl) fpsEl.innerText = currentFps.toFixed(1);
-            frameCount = 0;
-            lastTime = now;
-        }
+    // 2. Chạy AI ngầm bất đồng bộ không làm nghẽn khung hình video
+    if (!isInferencing) {
+        isInferencing = true;
+        setTimeout(async () => {
+            try {
+                const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
+                const inputName = session.inputNames[0];
+                const results = await session.run({ [inputName]: tensor });
+                const output = results[session.outputNames[0]];
 
-        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-
-        try {
-            const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
-            const inputName = session.inputNames[0];
-            const results = await session.run({ [inputName]: tensor });
-            const output = results[session.outputNames[0]];
-
-            const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-            updateTrackingAndCounting(detections);
-        } catch (err) {
-            console.error("Inference error:", err);
-        }
-
-        drawDetectionsAndLine();
-        updateUIStats();
+                const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
+                updateTrackingAndCounting(detections);
+                updateUIStats();
+            } catch (err) {
+                console.error("Inference error:", err);
+            } finally {
+                isInferencing = false;
+            }
+        }, 0);
     }
 
     requestAnimationFrame(processFrame);
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    // Flycam cần độ phân giải xử lý lớn (1280), Cột đèn dùng chuẩn (640)
-    const targetSize = (cameraMode === 'flycam') ? 1280 : 640;
+    const targetSize = (cameraMode === 'flycam') ? 960 : 640; // Giảm flycam từ 1280 xuống 960 để giữ độ chi tiết nhưng tăng tốc xử lý đáng kể
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -313,7 +307,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     const dets = [];
     const data = output.data;
     const dims = output.dims;
-
     const minBoxSize = (cameraMode === 'flycam') ? 4 : 10;
 
     const parseBox = (x1, y1, x2, y2, conf, clsId) => {
@@ -402,13 +395,11 @@ function updateTrackingAndCounting(detections) {
                 let hasCrossed = false;
 
                 if (cameraMode === 'flycam') {
-                    // Vạch ngang cho Flycam (kiểm tra trục Y)
                     const lineVal = lineConfig.positionRatio * canvas.height;
                     if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
                         hasCrossed = true;
                     }
                 } else {
-                    // Vạch dọc cho Cột đèn (kiểm tra trục X)
                     const lineVal = lineConfig.positionRatio * canvas.width;
                     if ((prevCx < lineVal && cx >= lineVal) || (prevCx > lineVal && cx <= lineVal)) {
                         hasCrossed = true;
