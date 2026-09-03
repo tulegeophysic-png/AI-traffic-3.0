@@ -15,7 +15,6 @@ let nextTrackId = 1;
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-// Cấu hình vạch đếm (tính theo tỷ lệ 0.0 -> 1.0)
 let lineConfig = {
     positionRatio: 0.45
 };
@@ -31,7 +30,6 @@ setInterval(() => {
     document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
-// Xử lý kéo thả vạch đếm trên canvas
 canvas.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -256,7 +254,7 @@ function preprocessWithLetterbox(sourceCanvas) {
     const float32Data = new Float32Array(3 * targetSize * targetSize);
 
     for (let i = 0; i < targetSize * targetSize; i++) {
-        float32Data[i] = data[i * 4] / 255.0;                      
+        float32Data[i] = data[i * 4] / 255.0;                     
         float32Data[targetSize * targetSize + i] = data[i * 4 + 1] / 255.0;      
         float32Data[2 * targetSize * targetSize + i] = data[i * 4 + 2] / 255.0;  
     }
