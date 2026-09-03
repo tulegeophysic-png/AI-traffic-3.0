@@ -231,7 +231,7 @@ async function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 480; // Giảm xuống 480 để tăng FPS, giảm giật hình
+    const targetSize = 480;
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -354,7 +354,6 @@ function updateTrackingAndCounting(detections) {
                 const lineVal = lineConfig.positionRatio * (direction.includes('vertical') ? canvas.height : canvas.width);
 
                 let hasCrossed = false;
-                // Bắt linh hoạt cả 2 chiều để không bị sót xe bất kể hướng di chuyển thực tế
                 if (direction.includes('vertical')) {
                     if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
                         hasCrossed = true;
