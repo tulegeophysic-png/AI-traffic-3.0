@@ -1,6 +1,6 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.45;
+let confidenceThreshold = 0.25; // Giảm xuống 0.25 để bắt xe dễ hơn
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -16,7 +16,7 @@ let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
 let lineConfig = {
-    positionRatio: 0.45
+    positionRatio: 0.65 // Mặc định vạch đếm nằm thấp xuống dưới một chút cho dễ nhìn
 };
 
 let isDraggingLine = false;
@@ -44,10 +44,10 @@ canvas.addEventListener('mousedown', (e) => {
 
     if (isHoriz) {
         const lineY = canvas.height * lineConfig.positionRatio;
-        if (Math.abs(mouseY - lineY) < 25) isDraggingLine = true;
+        if (Math.abs(mouseY - lineY) < 30) isDraggingLine = true;
     } else {
         const lineX = canvas.width * lineConfig.positionRatio;
-        if (Math.abs(mouseX - lineX) < 25) isDraggingLine = true;
+        if (Math.abs(mouseX - lineX) < 30) isDraggingLine = true;
     }
 });
 
@@ -75,7 +75,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.45;
+    lineConfig.positionRatio = 0.65;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -259,7 +259,7 @@ async function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 480;
+    const targetSize = 640; // Chuẩn input YOLOv10
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -273,7 +273,7 @@ function preprocessWithLetterbox(sourceCanvas) {
     const dw = (targetSize - nw) / 2;
     const dh = (targetSize - nh) / 2;
 
-    tempCtx.fillStyle = '#727272';
+    tempCtx.fillStyle = '#111827';
     tempCtx.fillRect(0, 0, targetSize, targetSize);
     tempCtx.drawImage(sourceCanvas, dw, dh, nw, nh);
 
@@ -318,6 +318,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     };
 
     if (dims && dims.length === 3) {
+        // Hỗ trợ cả 2 định dạng phổ biến [1, N, 6] và [1, 6, N] của YOLOv10 ONNX
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -347,7 +348,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 160; 
+        let minDst = 180; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -413,7 +414,7 @@ function updateTrackingAndCounting(detections) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 35) {
+        if (track.age < 45) {
             currentTracks.push(track);
         }
     });
@@ -427,8 +428,9 @@ function drawDetectionsAndLine() {
     const isVert = direction.includes('vertical');
     const lineCoord = lineConfig.positionRatio * (isVert ? canvas.height : canvas.width);
 
+    // Vẽ vạch đếm màu đỏ
     ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
     ctx.beginPath();
     if (isVert) {
         ctx.moveTo(0, lineCoord);
@@ -440,27 +442,28 @@ function drawDetectionsAndLine() {
     ctx.stroke();
 
     ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-    ctx.font = 'bold 13px Segoe UI';
+    ctx.font = 'bold 14px Segoe UI';
     if (isVert) {
-        ctx.fillText(`VẠCH ĐẾM (${direction.toUpperCase()})`, 15, lineCoord - 8);
+        ctx.fillText(`VẠCH ĐẾM (${direction.toUpperCase()})`, 20, lineCoord - 10);
     } else {
-        ctx.fillText(`VẠCH ĐẾM`, lineCoord + 8, 20);
+        ctx.fillText(`VẠCH ĐẾM`, lineCoord + 10, 25);
     }
 
+    // Vẽ khung bounding box và ID của xe
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
         const color = getCategoryColor(track.className);
 
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 3;
         ctx.strokeRect(x, y, w, h);
 
         ctx.fillStyle = color;
-        ctx.fillRect(x, y - 22, 120, 22);
+        ctx.fillRect(x, y - 24, 130, 24);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 4, y - 6);
+        ctx.font = 'bold 12px Segoe UI';
+        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 5, y - 7);
     });
 }
 
@@ -486,7 +489,6 @@ function updateUIStats() {
     setSafeText('count-truck', counts.truck);
     setSafeText('count-total', counts.total);
 
-    // Hỗ trợ đồng thời các tên ID thẻ thống kê khác nhau trong HTML của bạn
     setSafeText('car-count', counts.car);
     setSafeText('motorcycle-count', counts.motorcycle);
     setSafeText('bus-count', counts.bus);
