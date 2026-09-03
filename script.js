@@ -231,7 +231,7 @@ async function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640;
+    const targetSize = 480; // Giảm xuống 480 để tăng FPS, giảm giật hình
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -280,7 +280,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         rx2 = Math.max(0, Math.min(origWidth, rx2));
         ry2 = Math.max(0, Math.min(origHeight, ry2));
 
-        // LỌC NHIỄU VÙNG TRÊN CAO (Bỏ qua phần trời/cây cối chiếm 12% phía trên khung hình)
         const skyLimit = origHeight * 0.12;
         if (ry1 < skyLimit) return;
 
@@ -323,7 +322,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 160; // Tăng khoảng cách dò tìm để giữ ổn định ID khi xe chạy nhanh
+        let minDst = 160; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -355,19 +354,24 @@ function updateTrackingAndCounting(detections) {
                 const lineVal = lineConfig.positionRatio * (direction.includes('vertical') ? canvas.height : canvas.width);
 
                 let hasCrossed = false;
-                if (direction === 'vertical-down') {
-                    if (prevCy < lineVal && cy >= lineVal) hasCrossed = true;
-                } else if (direction === 'vertical-up') {
-                    if (prevCy > lineVal && cy <= lineVal) hasCrossed = true;
-                } else if (direction === 'horizontal-right') {
-                    if (prevCx < lineVal && cx >= lineVal) hasCrossed = true;
-                } else if (direction === 'horizontal-left') {
-                    if (prevCx > lineVal && cx <= lineVal) hasCrossed = true;
+                // Bắt linh hoạt cả 2 chiều để không bị sót xe bất kể hướng di chuyển thực tế
+                if (direction.includes('vertical')) {
+                    if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
+                        hasCrossed = true;
+                    }
+                } else {
+                    if ((prevCx < lineVal && cx >= lineVal) || (prevCx > lineVal && cx <= lineVal)) {
+                        hasCrossed = true;
+                    }
                 }
 
                 if (hasCrossed) {
                     countedIds.add(matchedTrack.id);
-                    counts[det.className]++;
+                    if (counts[det.className] !== undefined) {
+                        counts[det.className]++;
+                    } else {
+                        counts.car++;
+                    }
                     counts.total++;
                 }
             }
@@ -383,7 +387,6 @@ function updateTrackingAndCounting(detections) {
         }
     });
 
-    // Tăng thời gian lưu trữ track cũ (age < 35) tránh mất ID tạm thời khi bị che khuất
     tracks.forEach(track => {
         if (track.age < 35) {
             currentTracks.push(track);
