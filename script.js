@@ -1,6 +1,10 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.22; // Hạ nhẹ ngưỡng confidence để bắt tốt hơn các xe ở góc quay xa/flycam
+
+// CẤU HÌNH CHẾ ĐỘ CAMERA: 'flycam' (Góc từ trên xuống) hoặc 'fixed' (Cột đèn / Camera cố định)
+let cameraMode = 'flycam'; // Bạn có thể đổi thành 'fixed' nếu dùng camera cột đèn
+
+let confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -17,7 +21,7 @@ let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
 let lineConfig = {
-    positionRatio: 0.65 
+    positionRatio: 0.5 
 };
 
 let isDraggingLine = false;
@@ -35,6 +39,14 @@ setInterval(() => {
     if (clockEl) clockEl.innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
+// Hàm chuyển đổi chế độ nhanh trực tiếp trên code hoặc gọi từ giao diện
+function setCameraMode(mode) {
+    cameraMode = mode;
+    confidenceThreshold = (cameraMode === 'flycam') ? 0.15 : 0.25;
+    resetLinePosition();
+    resetSystemDataOnly();
+}
+
 canvas.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -42,16 +54,12 @@ canvas.addEventListener('mousedown', (e) => {
     const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    const dirEl = document.getElementById('counting-direction');
-    const directionSelect = dirEl ? dirEl.value : 'horizontal';
-    const isHoriz = directionSelect.includes('vertical');
-
-    if (isHoriz) {
+    if (cameraMode === 'flycam') {
         const lineY = canvas.height * lineConfig.positionRatio;
-        if (Math.abs(mouseY - lineY) < 30) isDraggingLine = true;
+        if (Math.abs(mouseY - lineY) < 40) isDraggingLine = true;
     } else {
         const lineX = canvas.width * lineConfig.positionRatio;
-        if (Math.abs(mouseX - lineX) < 30) isDraggingLine = true;
+        if (Math.abs(mouseX - lineX) < 40) isDraggingLine = true;
     }
 });
 
@@ -63,11 +71,7 @@ window.addEventListener('mousemove', (e) => {
     const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    const dirEl = document.getElementById('counting-direction');
-    const directionSelect = dirEl ? dirEl.value : 'horizontal';
-    const isHoriz = directionSelect.includes('vertical');
-
-    if (isHoriz) {
+    if (cameraMode === 'flycam') {
         lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseY / canvas.height));
     } else {
         lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseX / canvas.width));
@@ -79,7 +83,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.65;
+    lineConfig.positionRatio = 0.5;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -271,7 +275,8 @@ async function processFrame(timestamp) {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640; 
+    // Flycam cần độ phân giải xử lý lớn (1280), Cột đèn dùng chuẩn (640)
+    const targetSize = (cameraMode === 'flycam') ? 1280 : 640;
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -309,6 +314,8 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     const data = output.data;
     const dims = output.dims;
 
+    const minBoxSize = (cameraMode === 'flycam') ? 4 : 10;
+
     const parseBox = (x1, y1, x2, y2, conf, clsId) => {
         let rx1 = (x1 - dw) / ratio;
         let ry1 = (y1 - dh) / ratio;
@@ -323,8 +330,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         const boxW = rx2 - rx1;
         const boxH = ry2 - ry1;
 
-        // Lọc bỏ các bounding box quá nhỏ hoặc quá méo (nhiễu từ góc quay flycam xa)
-        if (boxW < 6 || boxH < 6) return;
+        if (boxW < minBoxSize || boxH < minBoxSize) return;
 
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
@@ -362,16 +368,16 @@ function updateTrackingAndCounting(detections) {
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
-        const frontY = y + h; 
+        const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 120; 
+        let minDst = (cameraMode === 'flycam') ? 100 : 80; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
                 const tcx = track.bbox[0] + track.bbox[2] / 2;
-                const tfy = track.bbox[1] + track.bbox[3];
-                const dst = Math.hypot(cx - tcx, frontY - tfy);
+                const tcy = track.bbox[1] + track.bbox[3] / 2;
+                const dst = Math.hypot(cx - tcx, cy - tcy);
                 if (dst < minDst) {
                     minDst = dst;
                     matchedTrack = track;
@@ -385,24 +391,25 @@ function updateTrackingAndCounting(detections) {
                 tracks.splice(index, 1);
             }
 
-            const prevFrontY = matchedTrack.bbox[1] + matchedTrack.bbox[3];
+            const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
+            const prevCy = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
 
             matchedTrack.bbox = [x, y, w, h];
             matchedTrack.confidence = det.confidence;
             matchedTrack.age = 0; 
 
             if (!countedIds.has(matchedTrack.id)) {
-                const dirEl = document.getElementById('counting-direction');
-                const direction = dirEl ? dirEl.value : 'horizontal';
-                const lineVal = lineConfig.positionRatio * (direction.includes('vertical') ? canvas.height : canvas.width);
-
                 let hasCrossed = false;
-                if (direction.includes('vertical')) {
-                    if ((prevFrontY < lineVal && frontY >= lineVal) || (prevFrontY > lineVal && frontY <= lineVal)) {
+
+                if (cameraMode === 'flycam') {
+                    // Vạch ngang cho Flycam (kiểm tra trục Y)
+                    const lineVal = lineConfig.positionRatio * canvas.height;
+                    if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
                         hasCrossed = true;
                     }
                 } else {
-                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
+                    // Vạch dọc cho Cột đèn (kiểm tra trục X)
+                    const lineVal = lineConfig.positionRatio * canvas.width;
                     if ((prevCx < lineVal && cx >= lineVal) || (prevCx > lineVal && cx <= lineVal)) {
                         hasCrossed = true;
                     }
@@ -448,15 +455,13 @@ function updateTrackingAndCounting(detections) {
 }
 
 function drawDetectionsAndLine() {
-    const dirEl = document.getElementById('counting-direction');
-    const direction = dirEl ? dirEl.value : 'horizontal';
-    const isVert = direction.includes('vertical');
-    const lineCoord = lineConfig.positionRatio * (isVert ? canvas.height : canvas.width);
+    const lineCoord = lineConfig.positionRatio * (cameraMode === 'flycam' ? canvas.height : canvas.width);
 
     ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    if (isVert) {
+    
+    if (cameraMode === 'flycam') {
         ctx.moveTo(0, lineCoord);
         ctx.lineTo(canvas.width, lineCoord);
     } else {
@@ -466,11 +471,12 @@ function drawDetectionsAndLine() {
     ctx.stroke();
 
     ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-    ctx.font = 'bold 14px Segoe UI';
-    if (isVert) {
-        ctx.fillText(`VẠCH ĐẾM (${direction.toUpperCase()})`, 20, lineCoord - 10);
+    ctx.font = 'bold 15px Segoe UI';
+    
+    if (cameraMode === 'flycam') {
+        ctx.fillText(`VẠCH ĐẾM FLYCAM (NGANG)`, 30, lineCoord - 12);
     } else {
-        ctx.fillText(`VẠCH ĐẾM`, lineCoord + 10, 25);
+        ctx.fillText(`VẠCH ĐẾM CỘT ĐÈN (DỌC)`, lineCoord + 10, 30);
     }
 
     tracks.forEach(track => {
@@ -482,11 +488,11 @@ function drawDetectionsAndLine() {
         ctx.strokeRect(x, y, w, h);
 
         ctx.fillStyle = color;
-        ctx.fillRect(x, y - 20, 110, 20);
+        ctx.fillRect(x, y - 18, 100, 18);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id}`, x + 4, y - 5);
+        ctx.font = 'bold 10px Segoe UI';
+        ctx.fillText(`${track.className.toUpperCase()} #${track.id}`, x + 3, y - 5);
     });
 }
 
