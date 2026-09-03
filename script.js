@@ -1,6 +1,6 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.3; // Nâng ngưỡng lọc nhiễu nhẹ giúp AI chính xác hơn
+let confidenceThreshold = 0.22; // Hạ nhẹ ngưỡng confidence để bắt tốt hơn các xe ở góc quay xa/flycam
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -11,8 +11,6 @@ let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
 let countedIds = new Set();
 let tracks = [];
 let nextTrackId = 1;
-
-// Lưu trữ lịch sử chi tiết từng xe đã đếm để xuất Excel
 let vehicleHistoryLog = [];
 
 let lowDensityThreshold = 5;
@@ -28,9 +26,8 @@ let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
 
-// Biến kiểm soát tốc độ khung hình (Frame Skipping) để chống giật, lag video
 let lastFrameTime = 0;
-const targetInterval = 1000 / 30; // Giới hạn tối đa khoảng 30 FPS để xử lý mượt mà, không nghẽn luồng
+const targetInterval = 1000 / 30;
 
 setInterval(() => {
     const now = new Date();
@@ -236,7 +233,6 @@ async function processFrame(timestamp) {
         return;
     }
 
-    // Cơ chế chống giật lag: Điều tiết nhịp khung hình ổn định, tránh quá tải CPU/GPU
     if (!lastFrameTime) lastFrameTime = timestamp;
     const elapsed = timestamp - lastFrameTime;
 
@@ -324,9 +320,15 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         rx2 = Math.max(0, Math.min(origWidth, rx2));
         ry2 = Math.max(0, Math.min(origHeight, ry2));
 
+        const boxW = rx2 - rx1;
+        const boxH = ry2 - ry1;
+
+        // Lọc bỏ các bounding box quá nhỏ hoặc quá méo (nhiễu từ góc quay flycam xa)
+        if (boxW < 6 || boxH < 6) return;
+
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
-                bbox: [rx1, ry1, rx2 - rx1, ry2 - ry1],
+                bbox: [rx1, ry1, boxW, boxH],
                 className: classMap[clsId],
                 confidence: conf
             });
@@ -360,10 +362,10 @@ function updateTrackingAndCounting(detections) {
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
-        const frontY = y + h; // Sử dụng mũi xe để bắt điểm chuẩn xác tuyệt đối
+        const frontY = y + h; 
 
         let matchedTrack = null;
-        let minDst = 160; // Nới rộng nhẹ khoảng cách tracking giúp bám sát xe mượt hơn, tránh mất ID oan
+        let minDst = 120; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -415,7 +417,6 @@ function updateTrackingAndCounting(detections) {
                     }
                     counts.total++;
 
-                    // Lưu thông tin chi tiết xe vào danh sách phục vụ xuất Excel
                     vehicleHistoryLog.push({
                         id: matchedTrack.id,
                         type: det.className.toUpperCase(),
@@ -438,7 +439,7 @@ function updateTrackingAndCounting(detections) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 35) {
+        if (track.age < 30) {
             currentTracks.push(track);
         }
     });
@@ -477,15 +478,15 @@ function drawDetectionsAndLine() {
         const color = getCategoryColor(track.className);
 
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2;
         ctx.strokeRect(x, y, w, h);
 
         ctx.fillStyle = color;
-        ctx.fillRect(x, y - 24, 130, 24);
+        ctx.fillRect(x, y - 20, 110, 20);
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 12px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id} ${(track.confidence * 100).toFixed(0)}%`, x + 5, y - 7);
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.fillText(`${track.className.toUpperCase()} #${track.id}`, x + 4, y - 5);
     });
 }
 
@@ -563,21 +564,19 @@ function captureFrame() {
     link.click();
 }
 
-// Chức năng xuất dữ liệu ra file Excel (.xlsx hoặc .csv tương thích Excel) hoàn chỉnh
 function exportToExcel() {
     if (vehicleHistoryLog.length === 0) {
         alert("Chưa có dữ liệu phương tiện nào được ghi nhận để xuất file!");
         return;
     }
 
-    let csvContent = "\uFEFF"; // BOM cho tiếng Việt chuẩn UTF-8 trên Excel
+    let csvContent = "\uFEFF"; 
     csvContent += "STT,ID Phương Tiện,Loại Xe,Độ Tin Cậy,Thời Gian Ghi Nhận\n";
 
     vehicleHistoryLog.forEach((item, index) => {
         csvContent += `${index + 1},ID_${item.id},${item.type},${item.confidence},"${item.time}"\n`;
     });
 
-    // Thêm dòng tổng kết số lượng cuối file
     csvContent += `\nTHỐNG KÊ TỔNG QUAN\n`;
     csvContent += `Car,${counts.car}\n`;
     csvContent += `Motorcycle,${counts.motorcycle}\n`;
