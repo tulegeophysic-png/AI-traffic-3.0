@@ -27,7 +27,8 @@ let currentFps = 0;
 
 setInterval(() => {
     const now = new Date();
-    document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
+    const clockEl = document.getElementById('clock');
+    if (clockEl) clockEl.innerText = now.toTimeString().split(' ')[0];
 }, 1000);
 
 canvas.addEventListener('mousedown', (e) => {
@@ -37,15 +38,16 @@ canvas.addEventListener('mousedown', (e) => {
     const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    const directionSelect = document.getElementById('counting-direction').value;
+    const dirEl = document.getElementById('counting-direction');
+    const directionSelect = dirEl ? dirEl.value : 'horizontal';
     const isHoriz = directionSelect.includes('vertical');
 
     if (isHoriz) {
         const lineY = canvas.height * lineConfig.positionRatio;
-        if (Math.abs(mouseY - lineY) < 15) isDraggingLine = true;
+        if (Math.abs(mouseY - lineY) < 25) isDraggingLine = true;
     } else {
         const lineX = canvas.width * lineConfig.positionRatio;
-        if (Math.abs(mouseX - lineX) < 15) isDraggingLine = true;
+        if (Math.abs(mouseX - lineX) < 25) isDraggingLine = true;
     }
 });
 
@@ -57,7 +59,8 @@ window.addEventListener('mousemove', (e) => {
     const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
 
-    const directionSelect = document.getElementById('counting-direction').value;
+    const dirEl = document.getElementById('counting-direction');
+    const directionSelect = dirEl ? dirEl.value : 'horizontal';
     const isHoriz = directionSelect.includes('vertical');
 
     if (isHoriz) {
@@ -75,27 +78,35 @@ function resetLinePosition() {
     lineConfig.positionRatio = 0.45;
 }
 
-document.getElementById('upload-video').addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (file) {
-        resetSystemDataOnly();
-        document.getElementById('file-name').innerText = file.name;
-        videoElement.src = URL.createObjectURL(file);
-        videoElement.load();
-        videoElement.onloadedmetadata = function() {
-            canvas.width = videoElement.videoWidth;
-            canvas.height = videoElement.videoHeight;
-            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-            if (session) {
-                document.getElementById('btn-start').disabled = false;
-                setStatus('active', 'AI READY');
-            }
-        };
-    }
-});
+const uploadInput = document.getElementById('upload-video');
+if (uploadInput) {
+    uploadInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            resetSystemDataOnly();
+            const fileNameEl = document.getElementById('file-name');
+            if (fileNameEl) fileNameEl.innerText = file.name;
+            videoElement.src = URL.createObjectURL(file);
+            videoElement.load();
+            videoElement.onloadedmetadata = function() {
+                canvas.width = videoElement.videoWidth;
+                canvas.height = videoElement.videoHeight;
+                ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                drawDetectionsAndLine();
+                if (session) {
+                    const startBtn = document.getElementById('btn-start');
+                    if (startBtn) startBtn.disabled = false;
+                    setStatus('active', 'AI READY');
+                }
+            };
+        }
+    });
+}
 
 function initChart() {
-    const ctxChart = document.getElementById('trafficChart').getContext('2d');
+    const chartCanvas = document.getElementById('trafficChart');
+    if (!chartCanvas) return;
+    const ctxChart = chartCanvas.getContext('2d');
     chartInstance = new Chart(ctxChart, {
         type: 'bar',
         data: {
@@ -122,7 +133,8 @@ initChart();
 
 function updateConfidence(val) {
     confidenceThreshold = parseFloat(val);
-    document.getElementById('conf-val').innerText = val;
+    const confValEl = document.getElementById('conf-val');
+    if (confValEl) confValEl.innerText = val;
 }
 
 async function loadModel() {
@@ -143,28 +155,35 @@ async function loadModel() {
         if (!session) throw new Error("Không tìm thấy model.");
         setStatus('active', 'AI READY');
         if (videoElement.src) {
-            document.getElementById('btn-start').disabled = false;
+            const startBtn = document.getElementById('btn-start');
+            if (startBtn) startBtn.disabled = false;
         }
     } catch (e) {
         setStatus('error', 'AI ERROR');
-        alert("Không thể tải file yolov10n.onnx. Hãy kiểm tra lại đường dẫn model!");
     }
 }
 loadModel();
 
 function setStatus(statusClass, text) {
     const badge = document.getElementById('system-status');
-    badge.className = `status-badge ${statusClass}`;
-    badge.innerText = text;
+    if (badge) {
+        badge.className = `status-badge ${statusClass}`;
+        badge.innerText = text;
+    }
 }
 
 function startAI() {
     if (!videoElement.src || !session) return;
     isRunning = true;
     videoElement.play();
-    document.getElementById('btn-start').disabled = true;
-    document.getElementById('btn-stop').disabled = false;
-    document.getElementById('btn-capture').disabled = false;
+    
+    const startBtn = document.getElementById('btn-start');
+    const stopBtn = document.getElementById('btn-stop');
+    const capBtn = document.getElementById('btn-capture');
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+    if (capBtn) capBtn.disabled = false;
+
     setStatus('active', 'AI RUNNING');
     requestAnimationFrame(processFrame);
 }
@@ -172,9 +191,14 @@ function startAI() {
 function stopAI() {
     isRunning = false;
     videoElement.pause();
-    document.getElementById('btn-start').disabled = false;
-    document.getElementById('btn-stop').disabled = true;
-    document.getElementById('btn-capture').disabled = true;
+
+    const startBtn = document.getElementById('btn-start');
+    const stopBtn = document.getElementById('btn-stop');
+    const capBtn = document.getElementById('btn-capture');
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    if (capBtn) capBtn.disabled = true;
+
     setStatus('stopped', 'AI STOPPED');
 }
 
@@ -190,9 +214,11 @@ function resetSystem() {
     stopAI();
     resetSystemDataOnly();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    document.getElementById('file-name').innerText = "Chưa chọn file";
+    const fileNameEl = document.getElementById('file-name');
+    if (fileNameEl) fileNameEl.innerText = "Chưa chọn file";
     videoElement.src = "";
-    document.getElementById('btn-start').disabled = true;
+    const startBtn = document.getElementById('btn-start');
+    if (startBtn) startBtn.disabled = true;
 }
 
 async function processFrame() {
@@ -206,7 +232,8 @@ async function processFrame() {
     frameCount++;
     if (now - lastTime >= 1000) {
         currentFps = (frameCount * 1000) / (now - lastTime);
-        document.getElementById('fps-display').innerText = currentFps.toFixed(1);
+        const fpsEl = document.getElementById('fps-display');
+        if (fpsEl) fpsEl.innerText = currentFps.toFixed(1);
         frameCount = 0;
         lastTime = now;
     }
@@ -221,11 +248,12 @@ async function processFrame() {
 
         const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
         updateTrackingAndCounting(detections);
-        drawDetectionsAndLine();
-        updateUIStats();
     } catch (err) {
         console.error("Inference error:", err);
     }
+
+    drawDetectionsAndLine();
+    updateUIStats();
 
     requestAnimationFrame(processFrame);
 }
@@ -280,9 +308,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         rx2 = Math.max(0, Math.min(origWidth, rx2));
         ry2 = Math.max(0, Math.min(origHeight, ry2));
 
-        const skyLimit = origHeight * 0.12;
-        if (ry1 < skyLimit) return;
-
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
                 bbox: [rx1, ry1, rx2 - rx1, ry2 - ry1],
@@ -292,7 +317,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         }
     };
 
-    if (dims.length === 3) {
+    if (dims && dims.length === 3) {
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -350,7 +375,8 @@ function updateTrackingAndCounting(detections) {
             matchedTrack.age = 0; 
 
             if (!countedIds.has(matchedTrack.id)) {
-                const direction = document.getElementById('counting-direction').value;
+                const dirEl = document.getElementById('counting-direction');
+                const direction = dirEl ? dirEl.value : 'horizontal';
                 const lineVal = lineConfig.positionRatio * (direction.includes('vertical') ? canvas.height : canvas.width);
 
                 let hasCrossed = false;
@@ -396,7 +422,8 @@ function updateTrackingAndCounting(detections) {
 }
 
 function drawDetectionsAndLine() {
-    const direction = document.getElementById('counting-direction').value;
+    const dirEl = document.getElementById('counting-direction');
+    const direction = dirEl ? dirEl.value : 'horizontal';
     const isVert = direction.includes('vertical');
     const lineCoord = lineConfig.positionRatio * (isVert ? canvas.height : canvas.width);
 
@@ -448,11 +475,22 @@ function getCategoryColor(className) {
 }
 
 function updateUIStats() {
-    document.getElementById('count-car').innerText = counts.car;
-    document.getElementById('count-moto').innerText = counts.motorcycle;
-    document.getElementById('count-bus').innerText = counts.bus;
-    document.getElementById('count-truck').innerText = counts.truck;
-    document.getElementById('count-total').innerText = counts.total;
+    const setSafeText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = val;
+    };
+
+    setSafeText('count-car', counts.car);
+    setSafeText('count-moto', counts.motorcycle);
+    setSafeText('count-bus', counts.bus);
+    setSafeText('count-truck', counts.truck);
+    setSafeText('count-total', counts.total);
+
+    // Hỗ trợ đồng thời các tên ID thẻ thống kê khác nhau trong HTML của bạn
+    setSafeText('car-count', counts.car);
+    setSafeText('motorcycle-count', counts.motorcycle);
+    setSafeText('bus-count', counts.bus);
+    setSafeText('truck-count', counts.truck);
 
     const activeVehicles = tracks.length;
     let density = 'LOW';
@@ -471,8 +509,10 @@ function updateUIStats() {
     }
 
     const densityBadge = document.getElementById('density-status');
-    densityBadge.className = `density-badge ${densityClass}`;
-    densityBadge.innerText = density;
+    if (densityBadge) {
+        densityBadge.className = `density-badge ${densityClass}`;
+        densityBadge.innerText = density;
+    }
 
     if (chartInstance) {
         chartInstance.data.datasets[0].data = [counts.car, counts.motorcycle, counts.bus, counts.truck];
@@ -482,6 +522,7 @@ function updateUIStats() {
 
 function setCongestion(isCongested) {
     const banner = document.getElementById('congestion-banner');
+    if (!banner) return;
     if (isCongested) {
         banner.className = 'congestion-banner warning';
         banner.innerText = '⚠️ TRAFFIC CONGESTION WARNING';
