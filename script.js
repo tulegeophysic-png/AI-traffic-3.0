@@ -1,6 +1,6 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.25; 
+let confidenceThreshold = 0.3; // Nâng ngưỡng lọc nhiễu nhẹ giúp AI chính xác hơn
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -11,6 +11,9 @@ let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
 let countedIds = new Set();
 let tracks = [];
 let nextTrackId = 1;
+
+// Lưu trữ lịch sử chi tiết từng xe đã đếm để xuất Excel
+let vehicleHistoryLog = [];
 
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
@@ -24,6 +27,10 @@ let chartInstance = null;
 let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
+
+// Biến kiểm soát tốc độ khung hình (Frame Skipping) để chống giật, lag video
+let lastFrameTime = 0;
+const targetInterval = 1000 / 30; // Giới hạn tối đa khoảng 30 FPS để xử lý mượt mà, không nghẽn luồng
 
 setInterval(() => {
     const now = new Date();
@@ -207,6 +214,7 @@ function resetSystemDataOnly() {
     countedIds.clear();
     tracks = [];
     nextTrackId = 1;
+    vehicleHistoryLog = [];
     updateUIStats();
 }
 
@@ -221,39 +229,47 @@ function resetSystem() {
     if (startBtn) startBtn.disabled = true;
 }
 
-async function processFrame() {
+async function processFrame(timestamp) {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
         stopAI();
         return;
     }
 
-    const now = performance.now();
-    frameCount++;
-    if (now - lastTime >= 1000) {
-        currentFps = (frameCount * 1000) / (now - lastTime);
-        const fpsEl = document.getElementById('fps-display');
-        if (fpsEl) fpsEl.innerText = currentFps.toFixed(1);
-        frameCount = 0;
-        lastTime = now;
+    // Cơ chế chống giật lag: Điều tiết nhịp khung hình ổn định, tránh quá tải CPU/GPU
+    if (!lastFrameTime) lastFrameTime = timestamp;
+    const elapsed = timestamp - lastFrameTime;
+
+    if (elapsed >= targetInterval) {
+        lastFrameTime = timestamp - (elapsed % targetInterval);
+
+        const now = performance.now();
+        frameCount++;
+        if (now - lastTime >= 1000) {
+            currentFps = (frameCount * 1000) / (now - lastTime);
+            const fpsEl = document.getElementById('fps-display');
+            if (fpsEl) fpsEl.innerText = currentFps.toFixed(1);
+            frameCount = 0;
+            lastTime = now;
+        }
+
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+        try {
+            const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
+            const inputName = session.inputNames[0];
+            const results = await session.run({ [inputName]: tensor });
+            const output = results[session.outputNames[0]];
+
+            const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
+            updateTrackingAndCounting(detections);
+        } catch (err) {
+            console.error("Inference error:", err);
+        }
+
+        drawDetectionsAndLine();
+        updateUIStats();
     }
-
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-
-    try {
-        const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
-        const inputName = session.inputNames[0];
-        const results = await session.run({ [inputName]: tensor });
-        const output = results[session.outputNames[0]];
-
-        const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-        updateTrackingAndCounting(detections);
-    } catch (err) {
-        console.error("Inference error:", err);
-    }
-
-    drawDetectionsAndLine();
-    updateUIStats();
 
     requestAnimationFrame(processFrame);
 }
@@ -344,10 +360,10 @@ function updateTrackingAndCounting(detections) {
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
-        const frontY = y + h; // Sử dụng cạnh dưới (mũi xe) để bắt vạch chính xác
+        const frontY = y + h; // Sử dụng mũi xe để bắt điểm chuẩn xác tuyệt đối
 
         let matchedTrack = null;
-        let minDst = 140; 
+        let minDst = 160; // Nới rộng nhẹ khoảng cách tracking giúp bám sát xe mượt hơn, tránh mất ID oan
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -398,6 +414,15 @@ function updateTrackingAndCounting(detections) {
                         counts.car++;
                     }
                     counts.total++;
+
+                    // Lưu thông tin chi tiết xe vào danh sách phục vụ xuất Excel
+                    vehicleHistoryLog.push({
+                        id: matchedTrack.id,
+                        type: det.className.toUpperCase(),
+                        confidence: (det.confidence * 100).toFixed(1) + '%',
+                        time: new Date().toLocaleTimeString(),
+                        timestamp: new Date().toISOString()
+                    });
                 }
             }
             currentTracks.push(matchedTrack);
@@ -413,7 +438,7 @@ function updateTrackingAndCounting(detections) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 30) {
+        if (track.age < 35) {
             currentTracks.push(track);
         }
     });
@@ -536,4 +561,36 @@ function captureFrame() {
     link.download = `ai-traffic-capture-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
+}
+
+// Chức năng xuất dữ liệu ra file Excel (.xlsx hoặc .csv tương thích Excel) hoàn chỉnh
+function exportToExcel() {
+    if (vehicleHistoryLog.length === 0) {
+        alert("Chưa có dữ liệu phương tiện nào được ghi nhận để xuất file!");
+        return;
+    }
+
+    let csvContent = "\uFEFF"; // BOM cho tiếng Việt chuẩn UTF-8 trên Excel
+    csvContent += "STT,ID Phương Tiện,Loại Xe,Độ Tin Cậy,Thời Gian Ghi Nhận\n";
+
+    vehicleHistoryLog.forEach((item, index) => {
+        csvContent += `${index + 1},ID_${item.id},${item.type},${item.confidence},"${item.time}"\n`;
+    });
+
+    // Thêm dòng tổng kết số lượng cuối file
+    csvContent += `\nTHỐNG KÊ TỔNG QUAN\n`;
+    csvContent += `Car,${counts.car}\n`;
+    csvContent += `Motorcycle,${counts.motorcycle}\n`;
+    csvContent += `Bus,${counts.bus}\n`;
+    csvContent += `Truck,${counts.truck}\n`;
+    csvContent += `Tổng Số Lượng,${counts.total}\n`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `thong_ke_giao_thong_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 }
