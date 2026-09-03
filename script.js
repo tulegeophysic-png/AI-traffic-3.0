@@ -2,7 +2,7 @@ let session = null;
 let isRunning = false;
 let cameraMode = 'flycam'; 
 
-let confidenceThreshold = 0.25; // Ngưỡng nhận diện cân đối cho bản nano
+let confidenceThreshold = 0.15; // Hạ ngưỡng xuống 0.15 để bắt tốt các xe ở xa trên cao tốc
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -27,9 +27,6 @@ let frameCount = 0;
 let currentFps = 0;
 let isInferencing = false;
 
-// Trạng thái bật/tắt vạch đếm (có thể chỉnh thành false nếu chỉ muốn hiển thị khung xe đơn thuần)
-let enableCountingLine = true; 
-
 setInterval(() => {
     const now = new Date();
     const clockEl = document.getElementById('clock');
@@ -43,7 +40,6 @@ function setCameraMode(mode) {
 }
 
 canvas.addEventListener('mousedown', (e) => {
-    if (!enableCountingLine) return;
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
@@ -52,7 +48,7 @@ canvas.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
-    if (!isDraggingLine || !enableCountingLine) return;
+    if (!isDraggingLine) return;
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
@@ -129,24 +125,16 @@ function updateConfidence(val) {
 async function loadModel() {
     try {
         setStatus('waiting', 'LOADING MODEL...');
-        // Ưu tiên nhận diện file yolov10n.onnx trước để tối ưu tốc độ
-        const modelFileNames = ['yolov10n.onnx', 'yolov10s.onnx'];
-        const folders = ['./model/', 'model/', './'];
+        const modelFileName = 'yolov10n.onnx'; 
+        const modelPaths = [`./model/${modelFileName}`, `model/${modelFileName}`, `./${modelFileName}`];
 
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
-        for (let folder of folders) {
-            for (let name of modelFileNames) {
-                try {
-                    let path = folder + name;
-                    session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
-                    if (session) {
-                        console.log("Đã tải thành công model:", path);
-                        break;
-                    }
-                } catch (innerErr) {}
-            }
-            if (session) break;
+        for (let path of modelPaths) {
+            try {
+                session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
+                if (session) break;
+            } catch (innerErr) {}
         }
 
         if (!session) throw new Error("Không tìm thấy model.");
@@ -157,7 +145,6 @@ async function loadModel() {
         }
     } catch (e) {
         setStatus('error', 'AI ERROR');
-        console.error("Lỗi tải model:", e);
     }
 }
 loadModel();
@@ -209,17 +196,6 @@ function resetSystemDataOnly() {
     updateUIStats();
 }
 
-function resetSystem() {
-    stopAI();
-    resetSystemDataOnly();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const fileNameEl = document.getElementById('file-name');
-    if (fileNameEl) fileNameEl.innerText = "Chưa chọn file";
-    videoElement.src = "";
-    const startBtn = document.getElementById('btn-start');
-    if (startBtn) startBtn.disabled = true;
-}
-
 function processFrame() {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
@@ -250,19 +226,7 @@ function processFrame() {
                 const output = results[session.outputNames[0]];
 
                 const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-                
-                if (enableCountingLine) {
-                    updateTrackingAndCounting(detections);
-                } else {
-                    // Nếu không dùng vạch đếm, chỉ cập nhật tracks để vẽ khung mượt
-                    tracks = detections.map((det, idx) => ({
-                        id: idx + 1,
-                        bbox: det.bbox,
-                        className: det.className,
-                        confidence: det.confidence,
-                        age: 0
-                    }));
-                }
+                updateTrackingAndCounting(detections);
                 updateUIStats();
             } catch (err) {
                 console.error("Inference execution error:", err);
@@ -276,7 +240,7 @@ function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640; // Kích thước chuẩn YOLOv10 giúp tối ưu hóa tốc độ xử lý tối đa
+    const targetSize = 640; 
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -340,6 +304,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     };
 
     if (dims && dims.length === 3) {
+        // Hỗ trợ cả định dạng [1, N, 6] và [1, 6, N]
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -369,7 +334,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 100; 
+        let minDst = 120; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -398,20 +363,8 @@ function updateTrackingAndCounting(detections) {
             if (!countedIds.has(matchedTrack.id)) {
                 const lineVal = lineConfig.positionRatio * canvas.height;
                 let hasCrossed = false;
-
-                const directionSelect = document.getElementById('counting-direction');
-                const countingDir = directionSelect ? directionSelect.value : 'vertical-down';
-
-                if (countingDir === 'vertical-down') {
-                    if (prevCy < lineVal && cy >= lineVal) hasCrossed = true;
-                } else if (countingDir === 'vertical-up') {
-                    if (prevCy > lineVal && cy <= lineVal) hasCrossed = true;
-                } else if (countingDir === 'horizontal-right') {
-                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
-                    if (prevCx < lineVal && cx >= lineVal) hasCrossed = true;
-                } else if (countingDir === 'horizontal-left') {
-                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
-                    if (prevCx > lineVal && cx <= lineVal) hasCrossed = true;
+                if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
+                    hasCrossed = true;
                 }
 
                 if (hasCrossed) {
@@ -445,7 +398,7 @@ function updateTrackingAndCounting(detections) {
     });
 
     tracks.forEach(track => {
-        if (track.age < 25) {
+        if (track.age < 30) {
             currentTracks.push(track);
         }
     });
@@ -454,20 +407,18 @@ function updateTrackingAndCounting(detections) {
 }
 
 function drawDetectionsAndLine() {
-    if (enableCountingLine) {
-        const lineCoord = lineConfig.positionRatio * canvas.height;
+    const lineCoord = lineConfig.positionRatio * canvas.height;
 
-        ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(0, lineCoord);
-        ctx.lineTo(canvas.width, lineCoord);
-        ctx.stroke();
+    ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, lineCoord);
+    ctx.lineTo(canvas.width, lineCoord);
+    ctx.stroke();
 
-        ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-        ctx.font = 'bold 15px Segoe UI';
-        ctx.fillText(`VẠCH ĐẾM PHƯƠNG TIỆN`, 30, lineCoord - 12);
-    }
+    ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
+    ctx.font = 'bold 15px Segoe UI';
+    ctx.fillText(`VẠCH ĐẾM NGANG`, 30, lineCoord - 12);
 
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
@@ -507,6 +458,11 @@ function updateUIStats() {
     setSafeText('count-bus', counts.bus);
     setSafeText('count-truck', counts.truck);
     setSafeText('count-total', counts.total);
+
+    setSafeText('car-count', counts.car);
+    setSafeText('motorcycle-count', counts.motorcycle);
+    setSafeText('bus-count', counts.bus);
+    setSafeText('truck-count', counts.truck);
 
     const activeVehicles = tracks.length;
     let density = 'LOW';
