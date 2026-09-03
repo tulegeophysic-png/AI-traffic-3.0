@@ -2,7 +2,7 @@ let session = null;
 let isRunning = false;
 let cameraMode = 'flycam'; 
 
-let confidenceThreshold = 0.15; // Hạ ngưỡng xuống 0.15 để bắt tốt các xe ở xa trên cao tốc
+let confidenceThreshold = 0.15; // Hạ ngưỡng nhận diện giúp bắt xe tốt hơn
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -18,7 +18,7 @@ let vehicleHistoryLog = [];
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = { positionRatio: 0.7 }; 
+let lineConfig = { positionRatio: 0.4 }; // Đưa vạch đếm lên 40% màn hình để dễ nhìn thấy
 let isDraggingLine = false;
 let chartInstance = null;
 
@@ -26,6 +26,8 @@ let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
 let isInferencing = false;
+
+let enableCountingLine = true; 
 
 setInterval(() => {
     const now = new Date();
@@ -40,6 +42,7 @@ function setCameraMode(mode) {
 }
 
 canvas.addEventListener('mousedown', (e) => {
+    if (!enableCountingLine) return;
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
@@ -48,7 +51,7 @@ canvas.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
-    if (!isDraggingLine) return;
+    if (!isDraggingLine || !enableCountingLine) return;
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
@@ -60,7 +63,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.7;
+    lineConfig.positionRatio = 0.4;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -125,16 +128,23 @@ function updateConfidence(val) {
 async function loadModel() {
     try {
         setStatus('waiting', 'LOADING MODEL...');
-        const modelFileName = 'yolov10n.onnx'; 
-        const modelPaths = [`./model/${modelFileName}`, `model/${modelFileName}`, `./${modelFileName}`];
+        const modelFileNames = ['yolov10n.onnx', 'yolov10s.onnx'];
+        const folders = ['./model/', 'model/', './'];
 
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
-        for (let path of modelPaths) {
-            try {
-                session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
-                if (session) break;
-            } catch (innerErr) {}
+        for (let folder of folders) {
+            for (let name of modelFileNames) {
+                try {
+                    let path = folder + name;
+                    session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
+                    if (session) {
+                        console.log("Đã tải thành công model:", path);
+                        break;
+                    }
+                } catch (innerErr) {}
+            }
+            if (session) break;
         }
 
         if (!session) throw new Error("Không tìm thấy model.");
@@ -145,6 +155,7 @@ async function loadModel() {
         }
     } catch (e) {
         setStatus('error', 'AI ERROR');
+        console.error("Lỗi tải model:", e);
     }
 }
 loadModel();
@@ -196,6 +207,17 @@ function resetSystemDataOnly() {
     updateUIStats();
 }
 
+function resetSystem() {
+    stopAI();
+    resetSystemDataOnly();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const fileNameEl = document.getElementById('file-name');
+    if (fileNameEl) fileNameEl.innerText = "Chưa chọn file";
+    videoElement.src = "";
+    const startBtn = document.getElementById('btn-start');
+    if (startBtn) startBtn.disabled = true;
+}
+
 function processFrame() {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
@@ -226,7 +248,18 @@ function processFrame() {
                 const output = results[session.outputNames[0]];
 
                 const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-                updateTrackingAndCounting(detections);
+                
+                if (enableCountingLine) {
+                    updateTrackingAndCounting(detections);
+                } else {
+                    tracks = detections.map((det, idx) => ({
+                        id: idx + 1,
+                        bbox: det.bbox,
+                        className: det.className,
+                        confidence: det.confidence,
+                        age: 0
+                    }));
+                }
                 updateUIStats();
             } catch (err) {
                 console.error("Inference execution error:", err);
@@ -304,7 +337,6 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     };
 
     if (dims && dims.length === 3) {
-        // Hỗ trợ cả định dạng [1, N, 6] và [1, 6, N]
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -334,7 +366,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 120; 
+        let minDst = 150; // Nới rộng khoảng cách để bắt tracking mượt hơn khi xe di chuyển nhanh
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -363,8 +395,20 @@ function updateTrackingAndCounting(detections) {
             if (!countedIds.has(matchedTrack.id)) {
                 const lineVal = lineConfig.positionRatio * canvas.height;
                 let hasCrossed = false;
-                if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
-                    hasCrossed = true;
+
+                const directionSelect = document.getElementById('counting-direction');
+                const countingDir = directionSelect ? directionSelect.value : 'vertical-down';
+
+                if (countingDir === 'vertical-down') {
+                    if (prevCy < lineVal && cy >= lineVal) hasCrossed = true;
+                } else if (countingDir === 'vertical-up') {
+                    if (prevCy > lineVal && cy <= lineVal) hasCrossed = true;
+                } else if (countingDir === 'horizontal-right') {
+                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
+                    if (prevCx < lineVal && cx >= lineVal) hasCrossed = true;
+                } else if (countingDir === 'horizontal-left') {
+                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
+                    if (prevCx > lineVal && cx <= lineVal) hasCrossed = true;
                 }
 
                 if (hasCrossed) {
@@ -407,18 +451,20 @@ function updateTrackingAndCounting(detections) {
 }
 
 function drawDetectionsAndLine() {
-    const lineCoord = lineConfig.positionRatio * canvas.height;
+    if (enableCountingLine) {
+        const lineCoord = lineConfig.positionRatio * canvas.height;
 
-    ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(0, lineCoord);
-    ctx.lineTo(canvas.width, lineCoord);
-    ctx.stroke();
+        ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, lineCoord);
+        ctx.lineTo(canvas.width, lineCoord);
+        ctx.stroke();
 
-    ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
-    ctx.font = 'bold 15px Segoe UI';
-    ctx.fillText(`VẠCH ĐẾM NGANG`, 30, lineCoord - 12);
+        ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
+        ctx.font = 'bold 15px Segoe UI';
+        ctx.fillText(`VẠCH ĐẾM PHƯƠNG TIỆN`, 30, lineCoord - 12);
+    }
 
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
@@ -458,11 +504,6 @@ function updateUIStats() {
     setSafeText('count-bus', counts.bus);
     setSafeText('count-truck', counts.truck);
     setSafeText('count-total', counts.total);
-
-    setSafeText('car-count', counts.car);
-    setSafeText('motorcycle-count', counts.motorcycle);
-    setSafeText('bus-count', counts.bus);
-    setSafeText('truck-count', counts.truck);
 
     const activeVehicles = tracks.length;
     let density = 'LOW';
