@@ -2,7 +2,7 @@ let session = null;
 let isRunning = false;
 let cameraMode = 'flycam'; 
 
-let confidenceThreshold = 0.15; // Hạ ngưỡng nhận diện giúp bắt xe tốt hơn
+let confidenceThreshold = 0.20; 
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -10,15 +10,16 @@ let ctx = canvas.getContext('2d');
 let classMap = { 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck' };
 
 let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
-let countedIds = new Set();
-let tracks = [];
-let nextTrackId = 1;
 let vehicleHistoryLog = [];
+
+// Lưu trữ trạng thái vị trí Y của các xe ở frame trước để so sánh cắt vạch
+let previousVehiclePositions = new Map(); 
+let uniqueGlobalId = 1;
 
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = { positionRatio: 0.4 }; // Đưa vạch đếm lên 40% màn hình để dễ nhìn thấy
+let lineConfig = { positionRatio: 0.5 }; // Đặt vạch ngang chính giữa màn hình (50%)
 let isDraggingLine = false;
 let chartInstance = null;
 
@@ -26,7 +27,6 @@ let lastTime = performance.now();
 let frameCount = 0;
 let currentFps = 0;
 let isInferencing = false;
-
 let enableCountingLine = true; 
 
 setInterval(() => {
@@ -34,12 +34,6 @@ setInterval(() => {
     const clockEl = document.getElementById('clock');
     if (clockEl) clockEl.innerText = now.toTimeString().split(' ')[0];
 }, 1000);
-
-function setCameraMode(mode) {
-    cameraMode = mode;
-    resetLinePosition();
-    resetSystemDataOnly();
-}
 
 canvas.addEventListener('mousedown', (e) => {
     if (!enableCountingLine) return;
@@ -63,7 +57,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.4;
+    lineConfig.positionRatio = 0.5;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -80,7 +74,7 @@ if (uploadInput) {
                 canvas.width = videoElement.videoWidth;
                 canvas.height = videoElement.videoHeight;
                 ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                drawDetectionsAndLine();
+                drawDetectionsAndLine([]);
                 if (session) {
                     const startBtn = document.getElementById('btn-start');
                     if (startBtn) startBtn.disabled = false;
@@ -200,9 +194,8 @@ function stopAI() {
 
 function resetSystemDataOnly() {
     counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
-    countedIds.clear();
-    tracks = [];
-    nextTrackId = 1;
+    previousVehiclePositions.clear();
+    uniqueGlobalId = 1;
     vehicleHistoryLog = [];
     updateUIStats();
 }
@@ -236,7 +229,6 @@ function processFrame() {
     }
 
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-    drawDetectionsAndLine();
 
     if (!isInferencing) {
         isInferencing = true;
@@ -250,15 +242,7 @@ function processFrame() {
                 const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
                 
                 if (enableCountingLine) {
-                    updateTrackingAndCounting(detections);
-                } else {
-                    tracks = detections.map((det, idx) => ({
-                        id: idx + 1,
-                        bbox: det.bbox,
-                        className: det.className,
-                        confidence: det.confidence,
-                        age: 0
-                    }));
+                    processCountingAndTracking(detections);
                 }
                 updateUIStats();
             } catch (err) {
@@ -353,104 +337,80 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     return dets;
 }
 
-function updateTrackingAndCounting(detections) {
-    let currentTracks = [];
-    
-    tracks.forEach(track => {
-        track.age++;
-    });
+// Cơ chế đếm tối ưu theo thời gian thực dựa trên vị trí tâm xe cắt vạch
+function processCountingAndTracking(detections) {
+    const lineY = canvas.height * lineConfig.positionRatio;
+    const directionSelect = document.getElementById('counting-direction');
+    const countingDir = directionSelect ? directionSelect.value : 'vertical-down';
+
+    let currentFrameVehicles = [];
 
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
         const cy = y + h / 2;
 
-        let matchedTrack = null;
-        let minDst = 150; // Nới rộng khoảng cách để bắt tracking mượt hơn khi xe di chuyển nhanh
+        // Tìm xem xe này có gần với xe nào ở frame trước không để giữ ID ổn định
+        let matchedId = null;
+        let minDistance = 60; // Khoảng cách tối đa để nhận diện là cùng 1 xe giữa 2 frame liên tiếp
 
-        tracks.forEach(track => {
-            if (track.className === det.className) {
-                const tcx = track.bbox[0] + track.bbox[2] / 2;
-                const tcy = track.bbox[1] + track.bbox[3] / 2;
-                const dst = Math.hypot(cx - tcx, cy - tcy);
-                if (dst < minDst) {
-                    minDst = dst;
-                    matchedTrack = track;
+        for (let [id, pos] of previousVehiclePositions.entries()) {
+            if (pos.className === det.className) {
+                let dist = Math.hypot(cx - pos.cx, cy - pos.cy);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    matchedId = id;
                 }
             }
-        });
+        }
 
-        if (matchedTrack) {
-            const index = tracks.indexOf(matchedTrack);
-            if (index > -1) {
-                tracks.splice(index, 1);
+        if (!matchedId) {
+            matchedId = uniqueGlobalId++;
+        }
+
+        let prevY = previousVehiclePositions.has(matchedId) ? previousVehiclePositions.get(matchedId).cy : cy;
+
+        // Kiểm tra điều kiện cắt vạch
+        if (!previousVehiclePositions.has(matchedId) || !previousVehiclePositions.get(matchedId).counted) {
+            let crossed = false;
+            if (countingDir === 'vertical-down') {
+                if (prevY < lineY && cy >= lineY) crossed = true;
+            } else if (countingDir === 'vertical-up') {
+                if (prevY > lineY && cy <= lineY) crossed = true;
+            } else {
+                if (prevY < lineY && cy >= lineY) crossed = true; // Mặc định nếu chọn ngang
             }
 
-            const prevCy = matchedTrack.bbox[1] + matchedTrack.bbox[3] / 2;
-
-            matchedTrack.bbox = [x, y, w, h];
-            matchedTrack.confidence = det.confidence;
-            matchedTrack.age = 0; 
-
-            if (!countedIds.has(matchedTrack.id)) {
-                const lineVal = lineConfig.positionRatio * canvas.height;
-                let hasCrossed = false;
-
-                const directionSelect = document.getElementById('counting-direction');
-                const countingDir = directionSelect ? directionSelect.value : 'vertical-down';
-
-                if (countingDir === 'vertical-down') {
-                    if (prevCy < lineVal && cy >= lineVal) hasCrossed = true;
-                } else if (countingDir === 'vertical-up') {
-                    if (prevCy > lineVal && cy <= lineVal) hasCrossed = true;
-                } else if (countingDir === 'horizontal-right') {
-                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
-                    if (prevCx < lineVal && cx >= lineVal) hasCrossed = true;
-                } else if (countingDir === 'horizontal-left') {
-                    const prevCx = matchedTrack.bbox[0] + matchedTrack.bbox[2] / 2;
-                    if (prevCx > lineVal && cx <= lineVal) hasCrossed = true;
-                }
-
-                if (hasCrossed) {
-                    countedIds.add(matchedTrack.id);
-                    if (counts[det.className] !== undefined) {
-                        counts[det.className]++;
-                    } else {
-                        counts.car++;
-                    }
-                    counts.total++;
-
-                    vehicleHistoryLog.push({
-                        id: matchedTrack.id,
-                        type: det.className.toUpperCase(),
-                        confidence: (det.confidence * 100).toFixed(1) + '%',
-                        time: new Date().toLocaleTimeString(),
-                        timestamp: new Date().toISOString()
-                    });
-                }
+            if (crossed) {
+                counts[det.className]++;
+                counts.total++;
+                vehicleHistoryLog.push({
+                    id: matchedId,
+                    type: det.className.toUpperCase(),
+                    confidence: (det.confidence * 100).toFixed(1) + '%',
+                    time: new Date().toLocaleTimeString(),
+                    timestamp: new Date().toISOString()
+                });
+                previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: true });
+            } else {
+                previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: false });
             }
-            currentTracks.push(matchedTrack);
         } else {
-            currentTracks.push({
-                id: nextTrackId++,
-                bbox: [x, y, w, h],
-                className: det.className,
-                confidence: det.confidence,
-                age: 0
-            });
+            previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: true });
         }
+
+        currentFrameVehicles.push({
+            id: matchedId,
+            bbox: [x, y, w, h],
+            className: det.className,
+            confidence: det.confidence
+        });
     });
 
-    tracks.forEach(track => {
-        if (track.age < 30) {
-            currentTracks.push(track);
-        }
-    });
-
-    tracks = currentTracks;
+    drawDetectionsAndLine(currentFrameVehicles);
 }
 
-function drawDetectionsAndLine() {
+function drawDetectionsAndLine(vehicles) {
     if (enableCountingLine) {
         const lineCoord = lineConfig.positionRatio * canvas.height;
 
@@ -466,9 +426,9 @@ function drawDetectionsAndLine() {
         ctx.fillText(`VẠCH ĐẾM PHƯƠNG TIỆN`, 30, lineCoord - 12);
     }
 
-    tracks.forEach(track => {
-        const [x, y, w, h] = track.bbox;
-        const color = getCategoryColor(track.className);
+    vehicles.forEach(veh => {
+        const [x, y, w, h] = veh.bbox;
+        const color = getCategoryColor(veh.className);
 
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
@@ -479,7 +439,7 @@ function drawDetectionsAndLine() {
 
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 10px Segoe UI';
-        ctx.fillText(`${track.className.toUpperCase()} #${track.id}`, x + 3, y - 5);
+        ctx.fillText(`${veh.className.toUpperCase()} #${veh.id}`, x + 3, y - 5);
     });
 }
 
@@ -505,15 +465,14 @@ function updateUIStats() {
     setSafeText('count-truck', counts.truck);
     setSafeText('count-total', counts.total);
 
-    const activeVehicles = tracks.length;
     let density = 'LOW';
     let densityClass = 'low';
 
-    if (activeVehicles >= highDensityThreshold) {
+    if (counts.total >= highDensityThreshold) {
         density = 'HIGH';
         densityClass = 'high';
         setCongestion(true);
-    } else if (activeVehicles >= lowDensityThreshold) {
+    } else if (counts.total >= lowDensityThreshold) {
         density = 'MEDIUM';
         densityClass = 'medium';
         setCongestion(false);
