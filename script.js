@@ -1,8 +1,8 @@
 let session = null;
 let isRunning = false;
-let cameraMode = 'flycam'; // Hoặc 'fixed'
+let cameraMode = 'flycam'; 
 
-let confidenceThreshold = 0.20; // Hạ ngưỡng xuống 0.2 để bắt tốt các xe ở xa trong video dọc
+let confidenceThreshold = 0.15; // Hạ ngưỡng xuống 0.15 để bắt tốt các xe ở xa trên cao tốc
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -18,7 +18,7 @@ let vehicleHistoryLog = [];
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = { positionRatio: 0.7 }; // Đặt vạch đếm ở 70 chiều cao màn hình
+let lineConfig = { positionRatio: 0.7 }; 
 let isDraggingLine = false;
 let chartInstance = null;
 
@@ -43,7 +43,6 @@ canvas.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
-
     const lineY = canvas.height * lineConfig.positionRatio;
     if (Math.abs(mouseY - lineY) < 40) isDraggingLine = true;
 });
@@ -53,7 +52,6 @@ window.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleY = canvas.height / rect.height;
     const mouseY = (e.clientY - rect.top) * scaleY;
-
     lineConfig.positionRatio = Math.max(0.05, Math.min(0.95, mouseY / canvas.height));
 });
 
@@ -198,17 +196,6 @@ function resetSystemDataOnly() {
     updateUIStats();
 }
 
-function resetSystem() {
-    stopAI();
-    resetSystemDataOnly();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const fileNameEl = document.getElementById('file-name');
-    if (fileNameEl) fileNameEl.innerText = "Chưa chọn file";
-    videoElement.src = "";
-    const startBtn = document.getElementById('btn-start');
-    if (startBtn) startBtn.disabled = true;
-}
-
 function processFrame() {
     if (!isRunning) return;
     if (videoElement.paused || videoElement.ended) {
@@ -253,7 +240,7 @@ function processFrame() {
 }
 
 function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640; // Cố định chuẩn 640 để tương thích 100% với mọi model YOLOv10 onnx tiêu chuẩn
+    const targetSize = 640; 
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -305,7 +292,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         const boxW = rx2 - rx1;
         const boxH = ry2 - ry1;
 
-        if (boxW < 3 || boxH < 3) return; // Cho phép bắt vật thể nhỏ từ trên cao xuống ở video dọc
+        if (boxW < 2 || boxH < 2) return; 
 
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
@@ -317,6 +304,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     };
 
     if (dims && dims.length === 3) {
+        // Hỗ trợ cả định dạng [1, N, 6] và [1, 6, N]
         if (dims[2] === 6) {
             let numRows = dims[1];
             for (let i = 0; i < numRows; i++) {
@@ -346,7 +334,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 120; // Khoảng cách tracking rộng hơn cho video dọc tốc độ di chuyển nhanh
+        let minDst = 120; 
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -374,8 +362,6 @@ function updateTrackingAndCounting(detections) {
 
             if (!countedIds.has(matchedTrack.id)) {
                 const lineVal = lineConfig.positionRatio * canvas.height;
-
-                // Kiểm tra xe cắt qua vạch ngang theo trục Y (đúng với video dọc hướng từ trên xuống)
                 let hasCrossed = false;
                 if ((prevCy < lineVal && cy >= lineVal) || (prevCy > lineVal && cy <= lineVal)) {
                     hasCrossed = true;
@@ -423,7 +409,6 @@ function updateTrackingAndCounting(detections) {
 function drawDetectionsAndLine() {
     const lineCoord = lineConfig.positionRatio * canvas.height;
 
-    // Vẽ vạch ngang màu đỏ để đếm xe chạy dọc theo video
     ctx.strokeStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -433,7 +418,7 @@ function drawDetectionsAndLine() {
 
     ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
     ctx.font = 'bold 15px Segoe UI';
-    ctx.fillText(`VẠCH ĐẾM NGANG (VIDEO DỌC)`, 30, lineCoord - 12);
+    ctx.fillText(`VẠCH ĐẾM NGANG`, 30, lineCoord - 12);
 
     tracks.forEach(track => {
         const [x, y, w, h] = track.bbox;
