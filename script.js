@@ -1,6 +1,6 @@
 let session = null;
 let isRunning = false;
-let confidenceThreshold = 0.50;
+let confidenceThreshold = 0.45;
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
@@ -280,6 +280,10 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
         rx2 = Math.max(0, Math.min(origWidth, rx2));
         ry2 = Math.max(0, Math.min(origHeight, ry2));
 
+        // LỌC NHIỄU VÙNG TRÊN CAO (Bỏ qua phần trời/cây cối chiếm 12% phía trên khung hình)
+        const skyLimit = origHeight * 0.12;
+        if (ry1 < skyLimit) return;
+
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
                 bbox: [rx1, ry1, rx2 - rx1, ry2 - ry1],
@@ -319,7 +323,7 @@ function updateTrackingAndCounting(detections) {
         const cy = y + h / 2;
 
         let matchedTrack = null;
-        let minDst = 100;
+        let minDst = 160; // Tăng khoảng cách dò tìm để giữ ổn định ID khi xe chạy nhanh
 
         tracks.forEach(track => {
             if (track.className === det.className) {
@@ -379,8 +383,9 @@ function updateTrackingAndCounting(detections) {
         }
     });
 
+    // Tăng thời gian lưu trữ track cũ (age < 35) tránh mất ID tạm thời khi bị che khuất
     tracks.forEach(track => {
-        if (track.age < 20) {
+        if (track.age < 35) {
             currentTracks.push(track);
         }
     });
