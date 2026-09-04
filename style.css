@@ -213,28 +213,38 @@ input[type="file"] { display: none; }
 .slider-group input[type="range"] { width: 100%; cursor: pointer; }
 
 .stats-card { display: flex; flex-direction: column; }
-.stats-list { display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: space-between; }
+.stats-list { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 
-.stat-item {
-    display: flex;
-    justify-content: space-between;
+.stat-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 4px;
     align-items: center;
-    padding: 10px 14px;
+    padding: 8px 10px;
     background: #0f172a;
     border-radius: 6px;
     border: 1px solid var(--border-color);
     font-weight: 600;
-    font-size: 13px;
+    font-size: 12px;
+    text-align: center;
 }
 
-.stat-item.total {
+.stat-row.header-row {
+    background: #1e293b;
+    color: #38bdf8;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.stat-row span:first-child { text-align: left; }
+
+.stat-row.total-row {
     background: var(--primary);
     color: white;
     border: none;
-    font-size: 14px;
+    font-weight: 800;
 }
 
-.stat-item .value { font-size: 18px; font-weight: 800; }
 .chart-container { position: relative; height: 200px; width: 100%; }
 
 .analytics-content { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }

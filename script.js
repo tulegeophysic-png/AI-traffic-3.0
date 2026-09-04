@@ -1,25 +1,25 @@
 let session = null;
 let isRunning = false;
-let cameraMode = 'flycam'; 
 
-let confidenceThreshold = 0.20; 
+let confidenceThreshold = 0.15; 
 let videoElement = document.getElementById('video-source');
 let canvas = document.getElementById('canvas');
 let ctx = canvas.getContext('2d');
 
 let classMap = { 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck' };
 
-let counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
-let vehicleHistoryLog = [];
+let countsLeft = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
+let countsRight = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
+let countsTotal = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
 
-// Lưu trữ trạng thái vị trí Y của các xe ở frame trước để so sánh cắt vạch
 let previousVehiclePositions = new Map(); 
 let uniqueGlobalId = 1;
+let countedGlobalIds = new Set();
 
 let lowDensityThreshold = 5;
 let highDensityThreshold = 15;
 
-let lineConfig = { positionRatio: 0.5 }; // Đặt vạch ngang chính giữa màn hình (50%)
+let lineConfig = { positionRatio: 0.35 }; 
 let isDraggingLine = false;
 let chartInstance = null;
 
@@ -34,6 +34,20 @@ setInterval(() => {
     const clockEl = document.getElementById('clock');
     if (clockEl) clockEl.innerText = now.toTimeString().split(' ')[0];
 }, 1000);
+
+function toggleCountingLineUI() {
+    enableCountingLine = !enableCountingLine;
+    const btn = document.getElementById('btn-toggle-line');
+    if (btn) {
+        if (enableCountingLine) {
+            btn.className = "btn btn-success";
+            btn.innerText = "Vạch: ON";
+        } else {
+            btn.className = "btn btn-danger";
+            btn.innerText = "Vạch: OFF";
+        }
+    }
+}
 
 canvas.addEventListener('mousedown', (e) => {
     if (!enableCountingLine) return;
@@ -57,7 +71,7 @@ window.addEventListener('mouseup', () => {
 });
 
 function resetLinePosition() {
-    lineConfig.positionRatio = 0.5;
+    lineConfig.positionRatio = 0.35;
 }
 
 const uploadInput = document.getElementById('upload-video');
@@ -93,21 +107,19 @@ function initChart() {
         type: 'bar',
         data: {
             labels: ['Car', 'Motorcycle', 'Bus', 'Truck'],
-            datasets: [{
-                label: 'Số lượng phương tiện',
-                data: [0, 0, 0, 0],
-                backgroundColor: ['#2563eb', '#16a34a', '#d97706', '#dc2626'],
-                borderWidth: 1
-            }]
+            datasets: [
+                { label: 'Bên Trái', data: [0, 0, 0, 0], backgroundColor: '#2563eb' },
+                { label: 'Bên Phải', data: [0, 0, 0, 0], backgroundColor: '#16a34a' }
+            ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#f8fafc', font: { size: 11 } } },
-                x: { grid: { display: false }, ticks: { color: '#f8fafc', font: { size: 11 } } }
+                y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#f8fafc', font: { size: 10 } } },
+                x: { grid: { display: false }, ticks: { color: '#f8fafc', font: { size: 10 } } }
             },
-            plugins: { legend: { display: false } }
+            plugins: { legend: { labels: { color: '#f8fafc', font: { size: 10 } } } }
         }
     });
 }
@@ -123,7 +135,7 @@ async function loadModel() {
     try {
         setStatus('waiting', 'LOADING MODEL...');
         const modelFileNames = ['yolov10n.onnx', 'yolov10s.onnx'];
-        const folders = ['./model/', 'model/', './'];
+        const folders = ['./', 'model/', './model/'];
 
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
@@ -132,10 +144,7 @@ async function loadModel() {
                 try {
                     let path = folder + name;
                     session = await ort.InferenceSession.create(path, { executionProviders: ['wasm'] });
-                    if (session) {
-                        console.log("Đã tải thành công model:", path);
-                        break;
-                    }
+                    if (session) break;
                 } catch (innerErr) {}
             }
             if (session) break;
@@ -192,24 +201,24 @@ function stopAI() {
     setStatus('stopped', 'AI STOPPED');
 }
 
+function resetSystem() {
+    resetSystemDataOnly();
+    if (videoElement) {
+        videoElement.currentTime = 0;
+    }
+}
+
 function resetSystemDataOnly() {
-    counts = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
+    countsLeft = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
+    countsRight = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
+    countsTotal = { car: 0, motorcycle: 0, bus: 0, truck: 0, total: 0 };
     previousVehiclePositions.clear();
+    countedGlobalIds.clear();
     uniqueGlobalId = 1;
-    vehicleHistoryLog = [];
     updateUIStats();
 }
 
-function resetSystem() {
-    stopAI();
-    resetSystemDataOnly();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const fileNameEl = document.getElementById('file-name');
-    if (fileNameEl) fileNameEl.innerText = "Chưa chọn file";
-    videoElement.src = "";
-    const startBtn = document.getElementById('btn-start');
-    if (startBtn) startBtn.disabled = true;
-}
+let latestVehicles = [];
 
 function processFrame() {
     if (!isRunning) return;
@@ -229,24 +238,22 @@ function processFrame() {
     }
 
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    drawDetectionsAndLine(latestVehicles);
 
     if (!isInferencing) {
         isInferencing = true;
         setTimeout(async () => {
             try {
-                const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas);
+                const { tensor, ratio, dw, dh } = preprocessWithLetterbox(canvas, 640);
                 const inputName = session.inputNames[0];
                 const results = await session.run({ [inputName]: tensor });
                 const output = results[session.outputNames[0]];
 
                 const detections = parseYolov10Output(output, canvas.width, canvas.height, ratio, dw, dh);
-                
-                if (enableCountingLine) {
-                    processCountingAndTracking(detections);
-                }
+                latestVehicles = processCountingAndTracking(detections);
                 updateUIStats();
             } catch (err) {
-                console.error("Inference execution error:", err);
+                console.error("Inference error:", err);
             } finally {
                 isInferencing = false;
             }
@@ -256,8 +263,7 @@ function processFrame() {
     requestAnimationFrame(processFrame);
 }
 
-function preprocessWithLetterbox(sourceCanvas) {
-    const targetSize = 640; 
+function preprocessWithLetterbox(sourceCanvas, targetSize = 640) {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = targetSize;
     tempCanvas.height = targetSize;
@@ -311,6 +317,7 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
 
         if (boxW < 2 || boxH < 2) return; 
 
+        // ĐÃ SỬA: Dùng trực tiếp giá trị từ slider thay vì ép cứng 0.05
         if (conf >= confidenceThreshold && classMap[clsId]) {
             dets.push({
                 bbox: [rx1, ry1, boxW, boxH],
@@ -337,22 +344,22 @@ function parseYolov10Output(output, origWidth, origHeight, ratio, dw, dh) {
     return dets;
 }
 
-// Cơ chế đếm tối ưu theo thời gian thực dựa trên vị trí tâm xe cắt vạch
+// HÀM TRACKING VÀ ĐẾM DỰA TRÊN HƯỚNG ĐÃ CHỌN VÀ VẠCH ĐẾM
 function processCountingAndTracking(detections) {
-    const lineY = canvas.height * lineConfig.positionRatio;
-    const directionSelect = document.getElementById('counting-direction');
-    const countingDir = directionSelect ? directionSelect.value : 'vertical-down';
-
     let currentFrameVehicles = [];
+    const countingDirectionSelect = document.getElementById('counting-direction');
+    const directionMode = countingDirectionSelect ? countingDirectionSelect.value : 'both';
+    
+    const lineCoord = lineConfig.positionRatio * canvas.height;
 
     detections.forEach(det => {
         const [x, y, w, h] = det.bbox;
         const cx = x + w / 2;
         const cy = y + h / 2;
 
-        // Tìm xem xe này có gần với xe nào ở frame trước không để giữ ID ổn định
         let matchedId = null;
-        let minDistance = 60; // Khoảng cách tối đa để nhận diện là cùng 1 xe giữa 2 frame liên tiếp
+        let minDistance = 150; 
+        let oldPos = null;
 
         for (let [id, pos] of previousVehiclePositions.entries()) {
             if (pos.className === det.className) {
@@ -360,6 +367,7 @@ function processCountingAndTracking(detections) {
                 if (dist < minDistance) {
                     minDistance = dist;
                     matchedId = id;
+                    oldPos = pos;
                 }
             }
         }
@@ -368,36 +376,47 @@ function processCountingAndTracking(detections) {
             matchedId = uniqueGlobalId++;
         }
 
-        let prevY = previousVehiclePositions.has(matchedId) ? previousVehiclePositions.get(matchedId).cy : cy;
+        if (!countedGlobalIds.has(matchedId)) {
+            let passedLine = false;
 
-        // Kiểm tra điều kiện cắt vạch
-        if (!previousVehiclePositions.has(matchedId) || !previousVehiclePositions.get(matchedId).counted) {
-            let crossed = false;
-            if (countingDir === 'vertical-down') {
-                if (prevY < lineY && cy >= lineY) crossed = true;
-            } else if (countingDir === 'vertical-up') {
-                if (prevY > lineY && cy <= lineY) crossed = true;
-            } else {
-                if (prevY < lineY && cy >= lineY) crossed = true; // Mặc định nếu chọn ngang
+            if (enableCountingLine && oldPos) {
+                if (directionMode === 'both') {
+                    if ((oldPos.cy < lineCoord && cy >= lineCoord) || (oldPos.cy > lineCoord && cy <= lineCoord)) {
+                        passedLine = true;
+                    }
+                } else if (directionMode === 'vertical-down') {
+                    if (oldPos.cy < lineCoord && cy >= lineCoord) {
+                        passedLine = true;
+                    }
+                } else if (directionMode === 'vertical-up') {
+                    if (oldPos.cy > lineCoord && cy <= lineCoord) {
+                        passedLine = true;
+                    }
+                }
+            } else if (!enableCountingLine) {
+                // Nếu tắt vạch đếm thì đếm ngay khi sinh ID mới
+                passedLine = true;
             }
 
-            if (crossed) {
-                counts[det.className]++;
-                counts.total++;
-                vehicleHistoryLog.push({
-                    id: matchedId,
-                    type: det.className.toUpperCase(),
-                    confidence: (det.confidence * 100).toFixed(1) + '%',
-                    time: new Date().toLocaleTimeString(),
-                    timestamp: new Date().toISOString()
-                });
-                previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: true });
-            } else {
-                previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: false });
+            if (passedLine) {
+                countedGlobalIds.add(matchedId);
+
+                const isLeftSide = cx < (canvas.width / 2);
+                
+                if (isLeftSide) {
+                    countsLeft[det.className]++;
+                    countsLeft.total++;
+                } else {
+                    countsRight[det.className]++;
+                    countsRight.total++;
+                }
+
+                countsTotal[det.className]++;
+                countsTotal.total++;
             }
-        } else {
-            previousVehiclePositions.set(matchedId, { cx, cy, className: det.className, counted: true });
         }
+
+        previousVehiclePositions.set(matchedId, { cx, cy, className: det.className });
 
         currentFrameVehicles.push({
             id: matchedId,
@@ -407,7 +426,7 @@ function processCountingAndTracking(detections) {
         });
     });
 
-    drawDetectionsAndLine(currentFrameVehicles);
+    return currentFrameVehicles;
 }
 
 function drawDetectionsAndLine(vehicles) {
@@ -423,24 +442,26 @@ function drawDetectionsAndLine(vehicles) {
 
         ctx.fillStyle = isDraggingLine ? '#38bdf8' : '#ef4444';
         ctx.font = 'bold 15px Segoe UI';
-        ctx.fillText(`VẠCH ĐẾM PHƯƠNG TIỆN`, 30, lineCoord - 12);
+        ctx.fillText(`VẠCH GIÁM SÁT (ĐẾM THEO HƯỜNG ĐÃ CHỌN)`, 30, lineCoord - 12);
     }
 
-    vehicles.forEach(veh => {
-        const [x, y, w, h] = veh.bbox;
-        const color = getCategoryColor(veh.className);
+    if (vehicles && vehicles.length > 0) {
+        vehicles.forEach(veh => {
+            const [x, y, w, h] = veh.bbox;
+            const color = getCategoryColor(veh.className);
 
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, w, h);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, w, h);
 
-        ctx.fillStyle = color;
-        ctx.fillRect(x, y - 18, 100, 18);
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y > 20 ? y - 20 : 0, 130, 20);
 
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 10px Segoe UI';
-        ctx.fillText(`${veh.className.toUpperCase()} #${veh.id}`, x + 3, y - 5);
-    });
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px Segoe UI';
+            ctx.fillText(`${veh.className.toUpperCase()} #${veh.id} (${(veh.confidence*100).toFixed(0)}%)`, x + 4, y > 20 ? y - 6: 14);
+        });
+    }
 }
 
 function getCategoryColor(className) {
@@ -459,20 +480,34 @@ function updateUIStats() {
         if (el) el.innerText = val;
     };
 
-    setSafeText('count-car', counts.car);
-    setSafeText('count-moto', counts.motorcycle);
-    setSafeText('count-bus', counts.bus);
-    setSafeText('count-truck', counts.truck);
-    setSafeText('count-total', counts.total);
+    setSafeText('count-car-left', countsLeft.car);
+    setSafeText('count-car-right', countsRight.car);
+    setSafeText('count-car', countsTotal.car);
+
+    setSafeText('count-moto-left', countsLeft.motorcycle);
+    setSafeText('count-moto-right', countsRight.motorcycle);
+    setSafeText('count-moto', countsTotal.motorcycle);
+
+    setSafeText('count-bus-left', countsLeft.bus);
+    setSafeText('count-bus-right', countsRight.bus);
+    setSafeText('count-bus', countsTotal.bus);
+
+    setSafeText('count-truck-left', countsLeft.truck);
+    setSafeText('count-truck-right', countsRight.truck);
+    setSafeText('count-truck', countsTotal.truck);
+
+    setSafeText('count-left-total', countsLeft.total);
+    setSafeText('count-right-total', countsRight.total);
+    setSafeText('count-total', countsTotal.total);
 
     let density = 'LOW';
     let densityClass = 'low';
 
-    if (counts.total >= highDensityThreshold) {
+    if (countsTotal.total >= highDensityThreshold) {
         density = 'HIGH';
         densityClass = 'high';
         setCongestion(true);
-    } else if (counts.total >= lowDensityThreshold) {
+    } else if (countsTotal.total >= lowDensityThreshold) {
         density = 'MEDIUM';
         densityClass = 'medium';
         setCongestion(false);
@@ -487,7 +522,8 @@ function updateUIStats() {
     }
 
     if (chartInstance) {
-        chartInstance.data.datasets[0].data = [counts.car, counts.motorcycle, counts.bus, counts.truck];
+        chartInstance.data.datasets[0].data = [countsLeft.car, countsLeft.motorcycle, countsLeft.bus, countsLeft.truck];
+        chartInstance.data.datasets[1].data = [countsRight.car, countsRight.motorcycle, countsRight.bus, countsRight.truck];
         chartInstance.update();
     }
 }
@@ -509,34 +545,4 @@ function captureFrame() {
     link.download = `ai-traffic-capture-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
-}
-
-function exportToExcel() {
-    if (vehicleHistoryLog.length === 0) {
-        alert("Chưa có dữ liệu phương tiện nào được ghi nhận để xuất file!");
-        return;
-    }
-
-    let csvContent = "\uFEFF"; 
-    csvContent += "STT,ID Phương Tiện,Loại Xe,Độ Tin Cậy,Thời Gian Ghi Nhận\n";
-
-    vehicleHistoryLog.forEach((item, index) => {
-        csvContent += `${index + 1},ID_${item.id},${item.type},${item.confidence},"${item.time}"\n`;
-    });
-
-    csvContent += `\nTHỐNG KÊ TỔNG QUAN\n`;
-    csvContent += `Car,${counts.car}\n`;
-    csvContent += `Motorcycle,${counts.motorcycle}\n`;
-    csvContent += `Bus,${counts.bus}\n`;
-    csvContent += `Truck,${counts.truck}\n`;
-    csvContent += `Tổng Số Lượng,${counts.total}\n`;
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `thong_ke_giao_thong_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
 }

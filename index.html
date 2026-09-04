@@ -25,7 +25,7 @@
 
         <div class="workspace-grid">
             <div class="card video-section">
-                <div class="card-title">📹 Khung Giám Sát Video Giao Thông & AI</div>
+                <div class="card-title">📹 Khung Giám Sát Video Giao Thông & AI (Enhanced Moto Detection)</div>
                 <div class="video-container">
                     <video id="video-source" muted playsinline crossorigin="anonymous"></video>
                     <canvas id="canvas"></canvas>
@@ -47,51 +47,68 @@
 
                 <div class="settings-panel" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <div class="slider-group">
-                        <label>Confidence Threshold: <span id="conf-val">0.45</span></label>
-                        <input type="range" id="conf-slider" min="0.1" max="0.9" step="0.05" value="0.45" oninput="updateConfidence(this.value)">
+                        <label>Confidence Threshold (Car/Truck/Bus): <span id="conf-val">0.15</span></label>
+                        <input type="range" id="conf-slider" min="0.05" max="0.9" step="0.05" value="0.15" oninput="updateConfidence(this.value)">
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 5px;">
                         <div style="flex: 1;">
                             <label>Hướng đếm phương tiện:</label>
                             <select id="counting-direction" style="width: 100%; background: #1e293b; color: #fff; border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer;">
-                                <option value="vertical-down">🡗 Từ Trên xuống Dưới (Y)</option>
-                                <option value="vertical-up">🡕 Từ Dưới lên Trên (Y)</option>
-                                <option value="horizontal-right">🡖 Từ Trái sang Phải (X)</option>
-                                <option value="horizontal-left">🡕 Từ Phải sang Trái (X)</option>
+                                <option value="both">🌐 Đếm Cả 2 Chiều (Lên & Xuống)</option>
+                                <option value="vertical-down">⬇️ Chỉ từ Trên xuống Dưới</option>
+                                <option value="vertical-up">⬆️ Chỉ từ Dưới lên Trên</option>
                             </select>
                         </div>
-                        <div style="display: flex; align-items: flex-end; padding-top: 16px;">
+                        <div style="display: flex; gap: 5px; align-items: flex-end; padding-top: 16px;">
+                            <button id="btn-toggle-line" class="btn btn-success" style="font-size: 11px; padding: 5px 10px;" onclick="toggleCountingLineUI()">Vạch: ON</button>
                             <button class="btn btn-info" style="font-size: 11px; padding: 5px 10px;" onclick="resetLinePosition()">Reset Vạch Đếm</button>
                         </div>
                     </div>
                     <div style="font-size: 11px; color: #94a3b8; font-style: italic;">
-                        💡 Mẹo: Bạn có thể nhấn giữ và kéo trực tiếp vạch đếm trên màn hình video để thay đổi vị trí.
+                        💡 Mẹo: Hệ thống tự động đếm ngay khi vượt qua vạch theo chiều đã chọn. Kéo thả vạch đỏ trực tiếp trên video để thay đổi vị trí.
                     </div>
                 </div>
             </div>
 
+            <!-- Bảng Thống Kê Theo Dõi Trái / Phải / Tổng -->
             <div class="card stats-card">
                 <div class="card-title">📊 Thống Kê Theo Dõi Thời Gian Thực</div>
                 <div class="stats-list">
-                    <div class="stat-item car">
-                        <span class="label">🚗 Car</span>
-                        <span class="value" id="count-car">0</span>
+                    <div class="stat-row header-row">
+                        <span>Loại Xe</span>
+                        <span>Trái</span>
+                        <span>Phải</span>
+                        <span>Tổng</span>
                     </div>
-                    <div class="stat-item moto">
-                        <span class="label">🏍 Motorcycle</span>
-                        <span class="value" id="count-moto">0</span>
+                    <div class="stat-row">
+                        <span>🚗 Car</span>
+                        <span id="count-car-left">0</span>
+                        <span id="count-car-right">0</span>
+                        <span id="count-car">0</span>
                     </div>
-                    <div class="stat-item bus">
-                        <span class="label">🚌 Bus</span>
-                        <span class="value" id="count-bus">0</span>
+                    <div class="stat-row">
+                        <span>🏍️ Moto</span>
+                        <span id="count-moto-left">0</span>
+                        <span id="count-moto-right">0</span>
+                        <span id="count-moto">0</span>
                     </div>
-                    <div class="stat-item truck">
-                        <span class="label">🚚 Truck</span>
-                        <span class="value" id="count-truck">0</span>
+                    <div class="stat-row">
+                        <span>🚌 Bus</span>
+                        <span id="count-bus-left">0</span>
+                        <span id="count-bus-right">0</span>
+                        <span id="count-bus">0</span>
                     </div>
-                    <div class="stat-item total">
-                        <span class="label">📈 TOTAL COUNT</span>
-                        <span class="value" id="count-total">0</span>
+                    <div class="stat-row">
+                        <span>🚚 Truck</span>
+                        <span id="count-truck-left">0</span>
+                        <span id="count-truck-right">0</span>
+                        <span id="count-truck">0</span>
+                    </div>
+                    <div class="stat-row total-row">
+                        <span>📈 TOTAL</span>
+                        <span id="count-left-total">0</span>
+                        <span id="count-right-total">0</span>
+                        <span id="count-total">0</span>
                     </div>
                 </div>
             </div>
@@ -99,7 +116,7 @@
 
         <div class="analytics-grid">
             <div class="card">
-                <div class="card-title">📈 Biểu Đồ Thống Kê Phương Tiện</div>
+                <div class="card-title">📈 Biểu Đồ Thống Kê (Trái / Phải)</div>
                 <div class="chart-container">
                     <canvas id="trafficChart"></canvas>
                 </div>
@@ -109,15 +126,15 @@
                 <div class="analytics-content">
                     <div class="analytic-row">
                         <span>Trạng thái Tracking:</span>
-                        <strong>Optimized Centroid Tracker + ID Persistence</strong>
+                        <strong>Centroid Tracker (ID-based Counting)</strong>
                     </div>
                     <div class="analytic-row">
-                        <span>Lọc nhiễu vùng trên cao:</span>
-                        <strong>Đã bật (Sky Mask Active)</strong>
+                        <span>Độ phân giải AI:</span>
+                        <strong>Enhanced 640x640 Resolution</strong>
                     </div>
                     <div class="analytic-row speed-warning">
-                        <span>⚠️ Cảnh báo tốc độ:</span>
-                        <span>SPEED ESTIMATION REQUIRES CAMERA CALIBRATION</span>
+                        <span>⚠️ Lưu ý Threshold:</span>
+                        <span>Confidence Threshold hoạt động chuẩn theo slider chỉnh tay</span>
                     </div>
                 </div>
             </div>
